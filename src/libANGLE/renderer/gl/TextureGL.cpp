@@ -6,6 +6,10 @@
 
 // TextureGL.cpp: Implements the class methods for TextureGL.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/gl/TextureGL.h"
 
 #include "common/bitset_utils.h"
@@ -2124,17 +2128,17 @@ angle::Result TextureGL::syncTextureStateSwizzle(const gl::Context *context,
 
             case GL_GREEN:
             case GL_BLUE:
-                if (context->getClientMajorVersion() <= 2)
-                {
-                    // In OES_depth_texture/ARB_depth_texture, depth
-                    // textures are treated as luminance.
-                    resultSwizzle = GL_RED;
-                }
-                else
+                if (context->getClientVersion() >= gl::ES_3_0)
                 {
                     // In GLES 3.0, depth textures are treated as RED
                     // textures, so green and blue should be 0.
                     resultSwizzle = GL_ZERO;
+                }
+                else
+                {
+                    // In OES_depth_texture, depth
+                    // textures are treated as luminance.
+                    resultSwizzle = GL_RED;
                 }
                 break;
 

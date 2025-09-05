@@ -14,7 +14,6 @@
 #include "compiler/translator/SymbolTable.h"
 #include "compiler/translator/tree_util/FindMain.h"
 #include "compiler/translator/tree_util/IntermNode_util.h"
-#include "compiler/translator/tree_util/IntermTraverse.h"
 #include "compiler/translator/util.h"
 
 namespace sh
@@ -22,9 +21,6 @@ namespace sh
 
 namespace
 {
-constexpr ImmutableString kEmulatedDepthRangeParams = ImmutableString("ANGLEDepthRangeParams");
-constexpr ImmutableString kDriverUniformsBlockName  = ImmutableString("ANGLEUniformBlock");
-constexpr ImmutableString kDriverUniformsVarName    = ImmutableString("ANGLEUniforms");
 
 constexpr const char kAcbBufferOffsets[] = "acbBufferOffsets";
 constexpr const char kDepthRange[]       = "depthRange";
@@ -69,9 +65,11 @@ bool DriverUniform::addComputeDriverUniformsToShader(TIntermBlock *root, TSymbol
     layoutQualifier.blockStorage     = EbsStd140;
     layoutQualifier.pushConstant     = true;
 
-    mDriverUniforms = DeclareInterfaceBlock(root, symbolTable, driverFieldList, EvqUniform,
-                                            layoutQualifier, TMemoryQualifier::Create(), 0,
-                                            kDriverUniformsBlockName, kDriverUniformsVarName);
+    const TInterfaceBlock *interfaceBlock = DeclareInterfaceBlock(
+        symbolTable, driverFieldList, layoutQualifier, kDriverUniformsBlockName);
+    mDriverUniforms = DeclareInterfaceBlockVariable(root, symbolTable, EvqUniform, interfaceBlock,
+                                                    layoutQualifier, TMemoryQualifier::Create(), 0,
+                                                    kDriverUniformsVarName);
     return mDriverUniforms != nullptr;
 }
 
@@ -170,9 +168,11 @@ bool DriverUniform::addGraphicsDriverUniformsToShader(TIntermBlock *root, TSymbo
         layoutQualifier.blockStorage     = EbsStd140;
         layoutQualifier.pushConstant     = true;
 
-        mDriverUniforms = DeclareInterfaceBlock(root, symbolTable, driverFieldList, EvqUniform,
-                                                layoutQualifier, TMemoryQualifier::Create(), 0,
-                                                kDriverUniformsBlockName, kDriverUniformsVarName);
+        const TInterfaceBlock *interfaceBlock = DeclareInterfaceBlock(
+            symbolTable, driverFieldList, layoutQualifier, kDriverUniformsBlockName);
+        mDriverUniforms = DeclareInterfaceBlockVariable(
+            root, symbolTable, EvqUniform, interfaceBlock, layoutQualifier,
+            TMemoryQualifier::Create(), 0, kDriverUniformsVarName);
     }
     else
     {

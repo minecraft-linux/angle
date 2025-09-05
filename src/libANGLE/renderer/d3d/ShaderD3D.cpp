@@ -303,7 +303,7 @@ std::shared_ptr<ShaderTranslateTask> ShaderD3D::compile(const gl::Context *conte
     if (gl::DebugAnnotationsActive(context))
     {
         sourcePath = angle::CreateTemporaryFile().value();
-        writeFile(sourcePath.c_str(), source.c_str(), source.length());
+        writeFile(sourcePath.c_str(), source);
         options->lineDirectives = true;
         options->sourcePath     = true;
     }
@@ -344,7 +344,7 @@ std::shared_ptr<ShaderTranslateTask> ShaderD3D::compile(const gl::Context *conte
     {
         options->allowTranslateUniformBlockToStructuredBuffer = true;
     }
-    if (extensions.multiviewOVR || extensions.multiview2OVR)
+    if (extensions.multiviewOVR)
     {
         options->initializeBuiltinsForInstancedMultiview = true;
     }

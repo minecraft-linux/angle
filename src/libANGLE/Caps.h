@@ -174,10 +174,6 @@ struct Limitations
     // GL_ANGLE_base_vertex_base_instance is emulated and should only be exposed to WebGL. Emulated
     // by default in shared renderer code.
     bool baseInstanceBaseVertexEmulated = true;
-
-    // EXT_base_instance is emulated and should only be exposed to WebGL. Emulated by default in
-    // shared renderer code.
-    bool baseInstanceEmulated = true;
 };
 
 struct TypePrecision
@@ -197,6 +193,20 @@ struct TypePrecision
 
     std::array<GLint, 2> range = {0, 0};
     GLint precision            = 0;
+};
+
+struct FragmentShadingRateProperties
+{
+    GLuint minFragmentShadingRateAttachmentTexelWidth;
+    GLuint minFragmentShadingRateAttachmentTexelHeight;
+    GLuint maxFragmentShadingRateAttachmentTexelWidth;
+    GLuint maxFragmentShadingRateAttachmentTexelHeight;
+    GLuint maxFragmentShadingRateAttachmentTexelAspectRatio;
+    GLuint maxFragmentShadingRateAttachmentLayers;
+    bool layeredShadingRateAttachments;
+    bool fragmentShadingRateNonTrivialCombinersSupport;
+    bool fragmentShadingRateWithShaderDepthStencilWritesSupport;
+    bool fragmentShadingRateWithSampleMaskSupport;
 };
 
 struct Caps
@@ -391,7 +401,6 @@ struct Caps
 
     // GL_ANGLE_shader_pixel_local_storage
     GLuint maxPixelLocalStoragePlanes                       = 0;
-    GLuint maxColorAttachmentsWithActivePixelLocalStorage   = 0;
     GLuint maxCombinedDrawBuffersAndPixelLocalStoragePlanes = 0;
 
     // GL_EXT_shader_pixel_local_storage.
@@ -421,9 +430,13 @@ struct Caps
 
     // GL_ARM_shader_framebuffer_fetch
     bool fragmentShaderFramebufferFetchMRT = false;
+
+    // EXT_fragment_shading_rate
+    FragmentShadingRateProperties fragmentShadingRateProperties = {};
 };
 
 Caps GenerateMinimumCaps(const Version &clientVersion, const Extensions &extensions);
+
 }  // namespace gl
 
 namespace egl
@@ -621,12 +634,6 @@ struct DisplayExtensions
     // EGL_IMG_context_priority
     bool contextPriority = false;
 
-    // EGL_ANGLE_ggp_stream_descriptor
-    bool ggpStreamDescriptor = false;
-
-    // EGL_ANGLE_swap_with_frame_token
-    bool swapWithFrameToken = false;
-
     // EGL_KHR_gl_colorspace
     bool glColorspace = false;
 
@@ -719,6 +726,15 @@ struct DisplayExtensions
 
     // EGL_EXT_surface_compression
     bool surfaceCompressionEXT = false;
+
+    // EGL_ANGLE_webgpu_texture_client_buffer
+    bool webgpuTextureClientBuffer = false;
+
+    // EXT_ANGLE_create_context_passthrough_shaders
+    bool createContextPassthroughShadersANGLE = false;
+
+    // EGL_NV_context_priority_realtime
+    bool contextPriorityRealtimeNV = false;
 };
 
 struct DeviceExtensions
@@ -751,6 +767,9 @@ struct DeviceExtensions
 
     // EGL_EXT_device_drm_render_node
     bool deviceDrmRenderNodeEXT = false;
+
+    // EGL_ANGLE_device_webgpu
+    bool deviceWebGPU = false;
 };
 
 struct ClientExtensions

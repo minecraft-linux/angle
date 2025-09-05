@@ -1,10 +1,14 @@
-
+//
 // Copyright 2013 The ANGLE Project Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
 
 // Clear11.cpp: Framebuffer clear utility class.
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
 
 #include "libANGLE/renderer/d3d/d3d11/Clear11.h"
 
@@ -390,7 +394,7 @@ angle::Result Clear11::clearFramebuffer(const gl::Context *context,
             clearParams.scissor.height == 0)
         {
             // The check assumes that the viewport offsets are not negative as according to the
-            // OVR_multiview2 spec.
+            // OVR_multiview spec.
             // Scissor rect is outside the renderbuffer or is an empty rect.
             return angle::Result::Continue;
         }

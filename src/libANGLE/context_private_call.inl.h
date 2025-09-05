@@ -4,8 +4,12 @@
 // found in the LICENSE file.
 //
 
-// context_private_call.cpp:
+// context_private_call.inl.h:
 //   Helpers that set/get state that is entirely locally accessed by the context.
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/context_private_call_autogen.h"
 
@@ -473,11 +477,26 @@ inline void ContextPrivateClipControl(PrivateState *privateState,
     privateState->setClipControl(origin, depth);
 }
 
-inline void ContextPrivateShadingRate(PrivateState *privateState,
-                                      PrivateStateCache *privateStateCache,
-                                      GLenum rate)
+inline void ContextPrivateShadingRateQCOM(PrivateState *privateState,
+                                          PrivateStateCache *privateStateCache,
+                                          ShadingRate rate)
 {
-    privateState->setShadingRate(rate);
+    privateState->setShadingRateQCOM(rate);
+}
+
+inline void ContextPrivateShadingRateEXT(PrivateState *privateState,
+                                         PrivateStateCache *privateStateCache,
+                                         ShadingRate rate)
+{
+    privateState->setShadingRateEXT(rate);
+}
+
+inline void ContextPrivateShadingRateCombinerOps(PrivateState *privateState,
+                                                 PrivateStateCache *privateStateCache,
+                                                 CombinerOp combinerOp0,
+                                                 CombinerOp combinerOp1)
+{
+    privateState->setShadingRateCombinerOps(combinerOp0, combinerOp1);
 }
 
 inline void ContextPrivateBlendColor(PrivateState *privateState,
@@ -495,7 +514,8 @@ inline void ContextPrivateBlendEquation(PrivateState *privateState,
                                         GLenum mode)
 {
     privateState->setBlendEquation(mode, mode);
-    if (privateState->getExtensions().blendEquationAdvancedKHR)
+    if (privateState->getExtensions().blendEquationAdvancedKHR ||
+        privateState->getClientVersion() >= ES_3_2)
     {
         privateStateCache->onBlendEquationOrFuncChange();
     }
@@ -507,7 +527,8 @@ inline void ContextPrivateBlendEquationi(PrivateState *privateState,
                                          GLenum mode)
 {
     privateState->setBlendEquationIndexed(mode, mode, buf);
-    if (privateState->getExtensions().blendEquationAdvancedKHR)
+    if (privateState->getExtensions().blendEquationAdvancedKHR ||
+        privateState->getClientVersion() >= ES_3_2)
     {
         privateStateCache->onBlendEquationOrFuncChange();
     }
@@ -519,7 +540,8 @@ inline void ContextPrivateBlendEquationSeparate(PrivateState *privateState,
                                                 GLenum modeAlpha)
 {
     privateState->setBlendEquation(modeRGB, modeAlpha);
-    if (privateState->getExtensions().blendEquationAdvancedKHR)
+    if (privateState->getExtensions().blendEquationAdvancedKHR ||
+        privateState->getClientVersion() >= ES_3_2)
     {
         privateStateCache->onBlendEquationOrFuncChange();
     }
@@ -532,7 +554,8 @@ inline void ContextPrivateBlendEquationSeparatei(PrivateState *privateState,
                                                  GLenum modeAlpha)
 {
     privateState->setBlendEquationIndexed(modeRGB, modeAlpha, buf);
-    if (privateState->getExtensions().blendEquationAdvancedKHR)
+    if (privateState->getExtensions().blendEquationAdvancedKHR ||
+        privateState->getClientVersion() >= ES_3_2)
     {
         privateStateCache->onBlendEquationOrFuncChange();
     }
@@ -694,51 +717,52 @@ inline void ContextPrivatePixelStorei(PrivateState *privateState,
             break;
 
         case GL_PACK_REVERSE_ROW_ORDER_ANGLE:
+            ASSERT(privateState->getExtensions().packReverseRowOrderANGLE);
             privateState->setPackReverseRowOrder(param != 0);
             break;
 
         case GL_UNPACK_ROW_LENGTH:
-            ASSERT(privateState->getClientMajorVersion() >= 3 ||
+            ASSERT(privateState->getClientVersion() >= ES_3_0 ||
                    privateState->getExtensions().unpackSubimageEXT);
             privateState->setUnpackRowLength(param);
             break;
 
         case GL_UNPACK_IMAGE_HEIGHT:
-            ASSERT(privateState->getClientMajorVersion() >= 3);
+            ASSERT(privateState->getClientVersion() >= ES_3_0);
             privateState->setUnpackImageHeight(param);
             break;
 
         case GL_UNPACK_SKIP_IMAGES:
-            ASSERT(privateState->getClientMajorVersion() >= 3);
+            ASSERT(privateState->getClientVersion() >= ES_3_0);
             privateState->setUnpackSkipImages(param);
             break;
 
         case GL_UNPACK_SKIP_ROWS:
-            ASSERT((privateState->getClientMajorVersion() >= 3) ||
+            ASSERT((privateState->getClientVersion() >= ES_3_0) ||
                    privateState->getExtensions().unpackSubimageEXT);
             privateState->setUnpackSkipRows(param);
             break;
 
         case GL_UNPACK_SKIP_PIXELS:
-            ASSERT((privateState->getClientMajorVersion() >= 3) ||
+            ASSERT((privateState->getClientVersion() >= ES_3_0) ||
                    privateState->getExtensions().unpackSubimageEXT);
             privateState->setUnpackSkipPixels(param);
             break;
 
         case GL_PACK_ROW_LENGTH:
-            ASSERT((privateState->getClientMajorVersion() >= 3) ||
+            ASSERT((privateState->getClientVersion() >= ES_3_0) ||
                    privateState->getExtensions().packSubimageNV);
             privateState->setPackRowLength(param);
             break;
 
         case GL_PACK_SKIP_ROWS:
-            ASSERT((privateState->getClientMajorVersion() >= 3) ||
+            ASSERT((privateState->getClientVersion() >= ES_3_0) ||
                    privateState->getExtensions().packSubimageNV);
             privateState->setPackSkipRows(param);
             break;
 
         case GL_PACK_SKIP_PIXELS:
-            ASSERT((privateState->getClientMajorVersion() >= 3) ||
+            ASSERT((privateState->getClientVersion() >= ES_3_0) ||
                    privateState->getExtensions().packSubimageNV);
             privateState->setPackSkipPixels(param);
             break;
@@ -1493,4 +1517,84 @@ inline void ContextPrivateTranslatex(PrivateState *privateState,
     ContextPrivateTranslatef(privateState, privateStateCache, ConvertFixedToFloat(x),
                              ConvertFixedToFloat(y), ConvertFixedToFloat(z));
 }
+
+inline void ContextPrivateDisableVertexAttribArray(PrivateState *privateState,
+                                                   PrivateStateCache *privateStateCache,
+                                                   GLuint index)
+{
+    const VertexArrayPrivate *vao = privateState->getVertexArrayPrivate();
+    if (!vao->getEnabledAttributesMask().test(index))
+    {
+        return;
+    }
+
+    privateState->setEnableVertexAttribArray(index, false);
+    privateStateCache->onVertexArrayStateChange();
+}
+
+inline void ContextPrivateEnableVertexAttribArray(PrivateState *privateState,
+                                                  PrivateStateCache *privateStateCache,
+                                                  GLuint index)
+{
+    const VertexArrayPrivate *vao = privateState->getVertexArrayPrivate();
+    if (vao->getEnabledAttributesMask().test(index))
+    {
+        return;
+    }
+
+    privateState->setEnableVertexAttribArray(index, true);
+    privateStateCache->onVertexArrayStateChange();
+}
+
+inline void ContextPrivateVertexAttribDivisor(PrivateState *privateState,
+                                              PrivateStateCache *privateStateCache,
+                                              GLuint index,
+                                              GLuint divisor)
+{
+    privateState->setVertexAttribDivisor(index, divisor);
+    privateStateCache->onVertexArrayStateChange();
+}
+
+inline void ContextPrivateVertexAttribBinding(PrivateState *privateState,
+                                              PrivateStateCache *privateStateCache,
+                                              GLuint attribIndex,
+                                              GLuint bindingIndex)
+{
+    privateState->setVertexAttribBinding(attribIndex, bindingIndex);
+    privateStateCache->onVertexArrayStateChange();
+}
+
+inline void ContextPrivateVertexBindingDivisor(PrivateState *privateState,
+                                               PrivateStateCache *privateStateCache,
+                                               GLuint bindingIndex,
+                                               GLuint divisor)
+{
+    privateState->setVertexBindingDivisor(bindingIndex, divisor);
+    privateStateCache->onVertexArrayFormatChange();
+}
+
+inline void ContextPrivateVertexAttribFormat(PrivateState *privateState,
+                                             PrivateStateCache *privateStateCache,
+                                             GLuint attribIndex,
+                                             GLint size,
+                                             VertexAttribType type,
+                                             GLboolean normalized,
+                                             GLuint relativeOffset)
+{
+    privateState->setVertexAttribFormat(attribIndex, size, type, ConvertToBool(normalized), false,
+                                        relativeOffset);
+    privateStateCache->onVertexArrayFormatChange();
+}
+
+inline void ContextPrivateVertexAttribIFormat(PrivateState *privateState,
+                                              PrivateStateCache *privateStateCache,
+                                              GLuint attribIndex,
+                                              GLint size,
+                                              VertexAttribType type,
+                                              GLuint relativeOffset)
+{
+    privateState->setVertexAttribFormat(attribIndex, size, type, false, true, relativeOffset);
+    privateStateCache->onVertexArrayFormatChange();
+}
+
 }  // namespace gl

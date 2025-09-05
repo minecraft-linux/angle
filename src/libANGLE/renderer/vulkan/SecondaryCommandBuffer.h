@@ -11,15 +11,14 @@
 #ifndef LIBANGLE_RENDERER_VULKAN_SECONDARYCOMMANDBUFFERVK_H_
 #define LIBANGLE_RENDERER_VULKAN_SECONDARYCOMMANDBUFFERVK_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "common/vulkan/vk_headers.h"
 #include "libANGLE/renderer/vulkan/vk_command_buffer_utils.h"
 #include "libANGLE/renderer/vulkan/vk_wrapper.h"
-
-#if ANGLE_ENABLE_VULKAN_SHARED_RING_BUFFER_CMD_ALLOC
-#    include "libANGLE/renderer/vulkan/AllocatorHelperRing.h"
-#else
 #    include "libANGLE/renderer/vulkan/AllocatorHelperPool.h"
-#endif
 
 namespace rx
 {
@@ -31,15 +30,9 @@ class ErrorContext;
 class RenderPassDesc;
 class SecondaryCommandPool;
 
-#if ANGLE_ENABLE_VULKAN_SHARED_RING_BUFFER_CMD_ALLOC
-using SecondaryCommandMemoryAllocator = SharedCommandMemoryAllocator;
-using SecondaryCommandBlockPool       = SharedCommandBlockPool;
-using SecondaryCommandBlockAllocator  = SharedCommandBlockAllocator;
-#else
 using SecondaryCommandMemoryAllocator = DedicatedCommandMemoryAllocator;
 using SecondaryCommandBlockPool       = DedicatedCommandBlockPool;
 using SecondaryCommandBlockAllocator  = DedicatedCommandBlockAllocator;
-#endif
 
 namespace priv
 {
@@ -58,6 +51,7 @@ enum class CommandID : uint16_t
     BindDescriptorSets,
     BindGraphicsPipeline,
     BindIndexBuffer,
+    BindIndexBuffer2,
     BindTransformFeedbackBuffers,
     BindVertexBuffers,
     BindVertexBuffers2,
@@ -164,7 +158,8 @@ struct BindDescriptorSetParams
 {
     CommandHeader header;
 
-    VkPipelineBindPoint pipelineBindPoint : 8;
+    // Actually a VkPipelineBindPoint; valid values are GRAPHICS or COMPUTE.
+    uint32_t pipelineBindPoint : 8;
     uint32_t firstSet : 8;
     uint32_t descriptorSetCount : 8;
     uint32_t dynamicOffsetCount : 8;
@@ -182,6 +177,17 @@ struct BindIndexBufferParams
     VkDeviceSize offset;
 };
 VERIFY_8_BYTE_ALIGNMENT(BindIndexBufferParams)
+
+struct BindIndexBuffer2Params
+{
+    CommandHeader header;
+
+    VkIndexType indexType;
+    VkBuffer buffer;
+    VkDeviceSize offset;
+    VkDeviceSize size;
+};
+VERIFY_8_BYTE_ALIGNMENT(BindIndexBuffer2Params)
 
 struct BindPipelineParams
 {
@@ -663,7 +669,8 @@ struct SetFragmentShadingRateParams
 
     uint32_t fragmentWidth : 8;
     uint32_t fragmentHeight : 8;
-    uint32_t vkFragmentShadingRateCombinerOp1 : 16;
+    uint32_t vkFragmentShadingRateCombinerOp0 : 8;
+    uint32_t vkFragmentShadingRateCombinerOp1 : 8;
 };
 VERIFY_8_BYTE_ALIGNMENT(SetFragmentShadingRateParams)
 
@@ -873,6 +880,10 @@ class SecondaryCommandBuffer final : angle::NonCopyable
     void bindGraphicsPipeline(const Pipeline &pipeline);
 
     void bindIndexBuffer(const Buffer &buffer, VkDeviceSize offset, VkIndexType indexType);
+    void bindIndexBuffer2(const Buffer &buffer,
+                          VkDeviceSize offset,
+                          VkDeviceSize size,
+                          VkIndexType indexType);
 
     void bindTransformFeedbackBuffers(uint32_t firstBinding,
                                       uint32_t bindingCount,
@@ -1127,16 +1138,6 @@ class SecondaryCommandBuffer final : angle::NonCopyable
         return mCommandAllocator.initialize(allocator);
     }
 
-    void attachAllocator(vk::SecondaryCommandMemoryAllocator *source)
-    {
-        mCommandAllocator.attachAllocator(source);
-    }
-
-    void detachAllocator(vk::SecondaryCommandMemoryAllocator *destination)
-    {
-        mCommandAllocator.detachAllocator(destination);
-    }
-
     angle::Result begin(ErrorContext *context,
                         const VkCommandBufferInheritanceInfo &inheritanceInfo)
     {
@@ -1348,6 +1349,9 @@ ANGLE_INLINE void SecondaryCommandBuffer::bindDescriptorSets(const PipelineLayou
                                                              uint32_t dynamicOffsetCount,
                                                              const uint32_t *dynamicOffsets)
 {
+    // Only GRAPHICS and COMPUTE pipeline bind points are valid here.
+    ASSERT(pipelineBindPoint == VK_PIPELINE_BIND_POINT_GRAPHICS ||
+           pipelineBindPoint == VK_PIPELINE_BIND_POINT_COMPUTE);
     const ArrayParamSize descSize =
         calculateArrayParameterSize<VkDescriptorSet>(descriptorSetCount);
     const ArrayParamSize offsetSize = calculateArrayParameterSize<uint32_t>(dynamicOffsetCount);
@@ -1384,6 +1388,19 @@ ANGLE_INLINE void SecondaryCommandBuffer::bindIndexBuffer(const Buffer &buffer,
         initCommand<BindIndexBufferParams>(CommandID::BindIndexBuffer);
     paramStruct->buffer    = buffer.getHandle();
     paramStruct->offset    = offset;
+    paramStruct->indexType = indexType;
+}
+
+ANGLE_INLINE void SecondaryCommandBuffer::bindIndexBuffer2(const Buffer &buffer,
+                                                           VkDeviceSize offset,
+                                                           VkDeviceSize size,
+                                                           VkIndexType indexType)
+{
+    BindIndexBuffer2Params *paramStruct =
+        initCommand<BindIndexBuffer2Params>(CommandID::BindIndexBuffer2);
+    paramStruct->buffer    = buffer.getHandle();
+    paramStruct->offset    = offset;
+    paramStruct->size      = size;
     paramStruct->indexType = indexType;
 }
 
@@ -2082,18 +2099,16 @@ ANGLE_INLINE void SecondaryCommandBuffer::setFragmentShadingRate(
     ASSERT(fragmentSize != nullptr);
 
     // Supported parameter values -
-    // 1. CombinerOp for ops[0] needs to be VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR
-    //    as there are no current usecases in ANGLE to use primitive fragment shading rates
-    // 2. The largest fragment size supported is 4x4
-    ASSERT(ops[0] == VK_FRAGMENT_SHADING_RATE_COMBINER_OP_KEEP_KHR);
+    // The largest fragment size supported is 4x4
     ASSERT(fragmentSize->width <= 4);
     ASSERT(fragmentSize->height <= 4);
 
     SetFragmentShadingRateParams *paramStruct =
         initCommand<SetFragmentShadingRateParams>(CommandID::SetFragmentShadingRate);
-    paramStruct->fragmentWidth                    = static_cast<uint16_t>(fragmentSize->width);
-    paramStruct->fragmentHeight                   = static_cast<uint16_t>(fragmentSize->height);
-    paramStruct->vkFragmentShadingRateCombinerOp1 = static_cast<uint16_t>(ops[1]);
+    SetBitField(paramStruct->fragmentWidth, fragmentSize->width);
+    SetBitField(paramStruct->fragmentHeight, fragmentSize->height);
+    SetBitField(paramStruct->vkFragmentShadingRateCombinerOp0, ops[0]);
+    SetBitField(paramStruct->vkFragmentShadingRateCombinerOp1, ops[1]);
 }
 
 ANGLE_INLINE void SecondaryCommandBuffer::setFrontFace(VkFrontFace frontFace)

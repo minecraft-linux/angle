@@ -34,7 +34,7 @@ class WindowSurfaceGLX : public SurfaceGLX
     egl::Error initialize(const egl::Display *display) override;
     egl::Error makeCurrent(const gl::Context *context) override;
 
-    egl::Error swap(const gl::Context *context) override;
+    egl::Error swap(const gl::Context *context, SurfaceSwapFeedback *feedback) override;
     egl::Error postSubBuffer(const gl::Context *context,
                              EGLint x,
                              EGLint y,
@@ -47,8 +47,7 @@ class WindowSurfaceGLX : public SurfaceGLX
     egl::Error releaseTexImage(const gl::Context *context, EGLint buffer) override;
     void setSwapInterval(const egl::Display *display, EGLint interval) override;
 
-    EGLint getWidth() const override;
-    EGLint getHeight() const override;
+    gl::Extents getSize() const override;
 
     EGLint isPostSubBufferSupported() const override;
     EGLint getSwapBehavior() const override;

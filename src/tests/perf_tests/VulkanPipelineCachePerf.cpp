@@ -5,6 +5,11 @@
 //
 // VulkanPipelineCachePerf:
 //   Performance benchmark for the Vulkan Pipeline cache.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "ANGLEPerfTest.h"
 
@@ -118,8 +123,9 @@ void VulkanPipelineCachePerfTest::step()
         {
             if (!mCache.getPipeline(hit, &desc, &result))
             {
-                (void)mCache.createPipeline(VK_NULL_HANDLE, &spc, rp, pl, ssm, defaultSpecConsts,
-                                            PipelineSource::Draw, hit, &desc, &result);
+                (void)mCache.createPipeline(VK_NULL_HANDLE, &spc, rp, pl,
+                                            {&ssm, &defaultSpecConsts}, PipelineSource::Draw, hit,
+                                            &desc, &result);
             }
         }
     }
@@ -130,7 +136,7 @@ void VulkanPipelineCachePerfTest::step()
         const auto &miss = mCacheMisses[mMissIndex];
         if (!mCache.getPipeline(miss, &desc, &result))
         {
-            (void)mCache.createPipeline(VK_NULL_HANDLE, &spc, rp, pl, ssm, defaultSpecConsts,
+            (void)mCache.createPipeline(VK_NULL_HANDLE, &spc, rp, pl, {&ssm, &defaultSpecConsts},
                                         PipelineSource::Draw, miss, &desc, &result);
         }
     }

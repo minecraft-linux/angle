@@ -7,6 +7,10 @@
 //   always have to be re-compiled. Can be used in conjunction with the platform
 //   layer to warm up the cache from disk.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 // Include zlib first, otherwise FAR gets defined elsewhere.
 #define USE_SYSTEM_ZLIB
 #include "compression_utils_portable.h"
@@ -84,8 +88,8 @@ void MemoryProgramCache::ComputeHash(const Context *context,
     // Add some ANGLE metadata and Context properties, such as version and back-end.
     hashStream.writeString(angle::GetANGLEShaderProgramVersion());
     hashStream.writeInt(angle::GetANGLESHVersion());
-    hashStream.writeInt(context->getClientMajorVersion());
-    hashStream.writeInt(context->getClientMinorVersion());
+    hashStream.writeInt(context->getClientVersion().getMajor());
+    hashStream.writeInt(context->getClientVersion().getMinor());
     hashStream.writeString(reinterpret_cast<const char *>(context->getString(GL_RENDERER)));
 
     // Hash pre-link program properties.
@@ -184,6 +188,17 @@ angle::Result MemoryProgramCache::putProgram(const egl::BlobCache::Key &programH
 
     ANGLE_TRY(program->serialize(context));
     const angle::MemoryBuffer &serializedProgram = program->getSerializedBinary();
+
+    if (serializedProgram.size() > kMaxUncompressedProgramSize)
+    {
+        std::ostringstream warningMessage;
+        warningMessage << "Program is too large to cache: ";
+        warningMessage << "program size: " << serializedProgram.size()
+                       << ", max size: " << kMaxUncompressedProgramSize;
+        ANGLE_PERF_WARNING(context->getState().getDebug(), GL_DEBUG_SEVERITY_LOW, "%s",
+                           warningMessage.str().c_str());
+        return angle::Result::Continue;
+    }
 
     angle::MemoryBuffer compressedData;
     if (!angle::CompressBlob(serializedProgram.size(), serializedProgram.data(), &compressedData))

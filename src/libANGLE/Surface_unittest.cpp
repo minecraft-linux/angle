@@ -30,8 +30,9 @@ class MockSurfaceImpl : public rx::SurfaceImpl
 
     MOCK_METHOD1(destroy, void(const egl::Display *));
     MOCK_METHOD1(initialize, egl::Error(const egl::Display *));
-    MOCK_METHOD1(swap, egl::Error(const gl::Context *));
-    MOCK_METHOD3(swapWithDamage, egl::Error(const gl::Context *, const EGLint *, EGLint));
+    MOCK_METHOD2(swap, egl::Error(const gl::Context *, SurfaceSwapFeedback *));
+    MOCK_METHOD4(swapWithDamage,
+                 egl::Error(const gl::Context *, const EGLint *, EGLint, SurfaceSwapFeedback *));
     MOCK_METHOD5(postSubBuffer, egl::Error(const gl::Context *, EGLint, EGLint, EGLint, EGLint));
     MOCK_METHOD2(querySurfacePointerANGLE, egl::Error(EGLint, void **));
     MOCK_METHOD3(bindTexImage, egl::Error(const gl::Context *context, gl::Texture *, EGLint));
@@ -39,8 +40,7 @@ class MockSurfaceImpl : public rx::SurfaceImpl
     MOCK_METHOD3(getSyncValues, egl::Error(EGLuint64KHR *, EGLuint64KHR *, EGLuint64KHR *));
     MOCK_METHOD2(getMscRate, egl::Error(EGLint *, EGLint *));
     MOCK_METHOD2(setSwapInterval, void(const egl::Display *, EGLint));
-    MOCK_CONST_METHOD0(getWidth, EGLint());
-    MOCK_CONST_METHOD0(getHeight, EGLint());
+    MOCK_CONST_METHOD0(getSize, gl::Extents());
     MOCK_CONST_METHOD0(isPostSubBufferSupported, EGLint(void));
     MOCK_CONST_METHOD0(getSwapBehavior, EGLint(void));
     MOCK_METHOD5(getAttachmentRenderTarget,

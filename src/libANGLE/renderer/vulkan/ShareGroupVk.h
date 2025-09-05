@@ -43,6 +43,8 @@ class ShareGroupVk : public ShareGroupImpl
     void onContextAdd() override;
 
     FramebufferCache &getFramebufferCache() { return mFramebufferCache; }
+    SamplerCache &getSamplerCache() { return mSamplerCache; }
+    SamplerYcbcrConversionCache &getYuvConversionCache() { return mYuvConversionCache; }
 
     bool hasAnyContextWithRobustness() const { return mState.hasAnyContextWithRobustness(); }
 
@@ -81,15 +83,6 @@ class ShareGroupVk : public ShareGroupImpl
 
     void onTextureRelease(TextureVk *textureVk);
 
-    VertexInputGraphicsPipelineCache *getVertexInputGraphicsPipelineCache()
-    {
-        return &mVertexInputGraphicsPipelineCache;
-    }
-    FragmentOutputGraphicsPipelineCache *getFragmentOutputGraphicsPipelineCache()
-    {
-        return &mFragmentOutputGraphicsPipelineCache;
-    }
-
     angle::Result scheduleMonolithicPipelineCreationTask(
         ContextVk *contextVk,
         vk::WaitableMonolithicPipelineCreationTask *taskOut);
@@ -126,6 +119,10 @@ class ShareGroupVk : public ShareGroupImpl
     // VkFramebuffer caches
     FramebufferCache mFramebufferCache;
 
+    // VkSampler and VkSamplerYcbcrConversion caches
+    SamplerCache mSamplerCache;
+    SamplerYcbcrConversionCache mYuvConversionCache;
+
     void resetPrevTexture() { mTextureUpload.resetPrevTexture(); }
 
     // ANGLE uses a PipelineLayout cache to store compatible pipeline layouts.
@@ -149,13 +146,6 @@ class ShareGroupVk : public ShareGroupImpl
 
     // The system time when last pruneEmptyBuffer gets called.
     double mLastPruneTime;
-
-    // Used when VK_EXT_graphics_pipeline_library is available, the vertex input and fragment output
-    // partial pipelines are created in the following caches.  These caches are in the share group
-    // because linked pipelines using these pipeline libraries are referenced from
-    // ProgramExecutableVk, and as such must stay alive as long as the program may be alive.
-    VertexInputGraphicsPipelineCache mVertexInputGraphicsPipelineCache;
-    FragmentOutputGraphicsPipelineCache mFragmentOutputGraphicsPipelineCache;
 
     // The system time when the last monolithic pipeline creation job was launched.  This is
     // rate-limited to avoid hogging all cores and interfering with the application threads.  A

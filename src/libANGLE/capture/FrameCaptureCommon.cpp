@@ -7,6 +7,10 @@
 //   ANGLE Frame capture implementation for both GL and CL.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/capture/FrameCapture.h"
 
 #define USE_SYSTEM_ZLIB
@@ -24,43 +28,6 @@ std::string GetBinaryDataFilePath(bool compression, const std::string &captureLa
         fnameStream << ".gz";
     }
     return fnameStream.str();
-}
-
-void SaveBinaryData(bool compression,
-                    const std::string &outDir,
-                    gl::ContextID contextId,
-                    const std::string &captureLabel,
-                    const std::vector<uint8_t> &binaryData)
-{
-    std::string binaryDataFileName = GetBinaryDataFilePath(compression, captureLabel);
-    std::string dataFilepath       = outDir + binaryDataFileName;
-
-    SaveFileHelper saveData(dataFilepath);
-
-    if (compression)
-    {
-        // Save compressed data.
-        uLong uncompressedSize       = static_cast<uLong>(binaryData.size());
-        uLong expectedCompressedSize = zlib_internal::GzipExpectedCompressedSize(uncompressedSize);
-
-        std::vector<uint8_t> compressedData(expectedCompressedSize, 0);
-
-        uLong compressedSize = expectedCompressedSize;
-        int zResult = zlib_internal::GzipCompressHelper(compressedData.data(), &compressedSize,
-                                                        binaryData.data(), uncompressedSize,
-                                                        nullptr, nullptr);
-
-        if (zResult != Z_OK)
-        {
-            FATAL() << "Error compressing binary data: " << zResult;
-        }
-
-        saveData.write(compressedData.data(), compressedSize);
-    }
-    else
-    {
-        saveData.write(binaryData.data(), binaryData.size());
-    }
 }
 
 template <>
@@ -92,7 +59,7 @@ void WriteBinaryParamReplay(ReplayWriter &replayWriter,
                             std::ostream &header,
                             const CallCapture &call,
                             const ParamCapture &param,
-                            std::vector<uint8_t> *binaryData)
+                            FrameCaptureBinaryData *binaryData)
 {
     std::string varName = replayWriter.getInlineVariableName(call.entryPoint, param.name);
 
@@ -118,10 +85,8 @@ void WriteBinaryParamReplay(ReplayWriter &replayWriter,
     {
         // Store in binary file if data are not of type string
         // Round up to 16-byte boundary for cross ABI safety
-        size_t offset = rx::roundUpPow2(binaryData->size(), kBinaryAlignment);
-        binaryData->resize(offset + data.size());
-        memcpy(binaryData->data() + offset, data.data(), data.size());
-        out << "(" << ParamTypeToString(overrideType) << ")&gBinaryData[" << offset << "]";
+        const size_t offset = binaryData->append(data.data(), data.size());
+        out << "(" << ParamTypeToString(overrideType) << ")GetBinaryData(" << offset << ")";
     }
 }
 
@@ -472,6 +437,7 @@ FrameCaptureShared::FrameCaptureShared()
       mResourceIDToSetupCalls{},
       mMaxAccessedResourceIDs{},
       mCaptureTrigger(0),
+      mEndCapture(0),
       mCaptureActive(false),
       mWindowSurfaceContextID({0})
 {
@@ -503,6 +469,20 @@ FrameCaptureShared::FrameCaptureShared()
         mCaptureEndFrame = atoi(endFromEnv.c_str());
     }
 
+    std::string binaryDataSizeFromEnv =
+        GetEnvironmentVarOrUnCachedAndroidProperty(kBinaryDataSizeVarName, kAndroidBinaryDataSize);
+    if (!binaryDataSizeFromEnv.empty())
+    {
+        mBinaryData.setBinaryDataSize(atoi(binaryDataSizeFromEnv.c_str()));
+    }
+
+    std::string blockSizeFromEnv =
+        GetEnvironmentVarOrUnCachedAndroidProperty(kBlockSizeVarName, kAndroidBlockSize);
+    if (!blockSizeFromEnv.empty())
+    {
+        mBinaryData.setBlockSize(atoi(blockSizeFromEnv.c_str()));
+    }
+
     std::string captureTriggerFromEnv =
         GetEnvironmentVarOrUnCachedAndroidProperty(kTriggerVarName, kAndroidTrigger);
     if (!captureTriggerFromEnv.empty())
@@ -511,6 +491,14 @@ FrameCaptureShared::FrameCaptureShared()
 
         // Using capture trigger, initialize frame range variables for MEC
         resetCaptureStartEndFrames();
+    }
+
+    std::string endCaptureFromEnv =
+        GetEnvironmentVarOrUnCachedAndroidProperty(kEndCaptureVarName, kAndroidEndCapture);
+    if (!endCaptureFromEnv.empty())
+    {
+        mEndCapture      = atoi(endCaptureFromEnv.c_str());
+        mCaptureEndFrame = std::numeric_limits<uint32_t>::max();
     }
 
     std::string labelFromEnv =
@@ -648,6 +636,29 @@ uint32_t FrameCaptureShared::getReplayFrameIndex() const
     return mFrameIndex - mCaptureStartFrame + 1;
 }
 
+bool FrameCaptureShared::checkForCaptureEnd()
+{
+    if (mEndCapture == 0)
+    {
+        return false;
+    }
+
+    std::string captureEndStr = GetEndCapture();
+    if (captureEndStr.empty())
+    {
+        return false;
+    }
+
+    uint32_t captureEnd = atoi(captureEndStr.c_str());
+    if ((mEndCapture > 0) && (captureEnd == 0))
+    {
+        mCaptureEndFrame = mFrameIndex;
+        mEndCapture      = 0;
+        return true;
+    }
+    return false;
+}
+
 bool FrameCaptureShared::isRuntimeEnabled()
 {
     if (!mRuntimeEnabled && mRuntimeInitialized)
@@ -690,9 +701,17 @@ bool FrameCaptureShared::isRuntimeEnabled()
         mCaptureTrigger = atoi(captureTriggerFromEnv.c_str());
     }
 
-    mRuntimeEnabled =
-        enabledFromEnv != "0" &&
-        (mCaptureTrigger || (mCaptureEndFrame != 0 && mCaptureEndFrame >= mCaptureStartFrame));
+    uint32_t mEndCapture = 0;
+    std::string endCaptureFromEnv =
+        GetEnvironmentVarOrUnCachedAndroidProperty(kEndCaptureVarName, kAndroidEndCapture);
+    if (!endCaptureFromEnv.empty())
+    {
+        mEndCapture = atoi(endCaptureFromEnv.c_str());
+    }
+
+    mRuntimeEnabled = enabledFromEnv != "0" &&
+                      (mCaptureTrigger || mEndCapture ||
+                       (mCaptureEndFrame != 0 && mCaptureEndFrame >= mCaptureStartFrame));
 
     mRuntimeInitialized = true;
     return mRuntimeEnabled;
@@ -944,7 +963,7 @@ void ReplayWriter::saveFrame()
     ASSERT(!mSourceFileExtension.empty());
 
     std::stringstream strstr;
-    strstr << mFilenamePattern << "_" << std::setfill('0') << std::setw(3) << mFrameIndex << "."
+    strstr << mFilenamePattern << "_" << std::setfill('0') << std::setw(4) << mFrameIndex << "."
            << mSourceFileExtension;
 
     std::string frameFilePath = strstr.str();
@@ -1147,6 +1166,12 @@ void CaptureString(const GLchar *str, ParamCapture *paramCapture)
 {
     // include the '\0' suffix
     CaptureMemory(str, strlen(str) + 1, paramCapture);
+}
+
+std::string GetEndCapture()
+{
+    // Use the GetAndSet variant to improve future lookup times
+    return GetAndSetEnvironmentVarOrUnCachedAndroidProperty(kEndCaptureVarName, kAndroidEndCapture);
 }
 
 TrackedResource::TrackedResource() = default;

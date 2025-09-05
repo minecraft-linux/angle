@@ -7,11 +7,16 @@
 // renderergl_utils.cpp: Conversion functions and other utility routines
 // specific to the OpenGL renderer.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/gl/renderergl_utils.h"
 
 #include <array>
 #include <limits>
 
+#include "GLSLANG/ShaderLang.h"
 #include "common/android_util.h"
 #include "common/mathutil.h"
 #include "common/platform.h"
@@ -562,7 +567,7 @@ static gl::TextureCaps GenerateTextureFormatCaps(const FunctionsGL *functions,
     {
         GLenum queryInternalFormat = internalFormat;
 
-        if (internalFormat == GL_BGRA8_EXT)
+        if (internalFormat == GL_BGRA8_EXT || internalFormat == GL_BGRA_EXT)
         {
             // Querying GL_NUM_SAMPLE_COUNTS for GL_BGRA8_EXT generates an INVALID_ENUM on some
             // drivers.  It seems however that allocating a multisampled renderbuffer of this format
@@ -1348,6 +1353,12 @@ void GenerateCaps(const FunctionsGL *functions,
         caps->maxImageUnits = QuerySingleGLInt(functions, GL_MAX_IMAGE_UNITS);
         caps->maxCombinedImageUniforms =
             QuerySingleGLInt(functions, GL_MAX_COMBINED_IMAGE_UNIFORMS);
+        if (features.forceMaxCombinedShaderOutputResources.enabled)
+        {
+            caps->maxCombinedShaderOutputResources = caps->maxCombinedImageUniforms +
+                                                     caps->maxCombinedShaderStorageBlocks +
+                                                     caps->maxColorAttachments;
+        }
     }
     else
     {
@@ -1449,7 +1460,6 @@ void GenerateCaps(const FunctionsGL *functions,
                                       functions->hasGLExtension("GL_ARB_pixel_buffer_object") ||
                                       functions->hasGLExtension("GL_EXT_pixel_buffer_object") ||
                                       functions->hasGLESExtension("GL_NV_pixel_buffer_object");
-    extensions->syncARB      = nativegl::SupportsFenceSync(functions);
     extensions->mapbufferOES = functions->isAtLeastGL(gl::Version(1, 5)) ||
                                functions->isAtLeastGLES(gl::Version(3, 0)) ||
                                functions->hasGLESExtension("GL_OES_mapbuffer");
@@ -1692,7 +1702,7 @@ void GenerateCaps(const FunctionsGL *functions,
                                         functions->hasGLExtension("GL_ARB_stencil_texturing") ||
                                         functions->isAtLeastGLES(gl::Version(3, 1));
 
-    if (features.supportsShaderFramebufferFetchEXT.enabled)
+    if (features.supportsShaderFramebufferFetchEXT.enabled && extensions->drawBuffersIndexedAny())
     {
         // We can support PLS natively, probably in tiled memory.
         extensions->shaderPixelLocalStorageANGLE         = true;
@@ -1783,7 +1793,6 @@ void GenerateCaps(const FunctionsGL *functions,
     }
 
     extensions->copyTextureCHROMIUM = true;
-    extensions->syncQueryCHROMIUM   = SyncQueryGL::IsSupported(functions);
 
     // Note that OES_texture_storage_multisample_2d_array support could be extended down to GL 3.2
     // if we emulated texStorage* API on top of texImage*.
@@ -1792,8 +1801,8 @@ void GenerateCaps(const FunctionsGL *functions,
         functions->hasGLExtension("GL_ARB_texture_storage_multisample") ||
         functions->hasGLESExtension("GL_OES_texture_storage_multisample_2d_array");
 
-    extensions->multiviewMultisampleANGLE = extensions->textureStorageMultisample2dArrayOES &&
-                                            (extensions->multiviewOVR || extensions->multiview2OVR);
+    extensions->multiviewMultisampleANGLE =
+        extensions->textureStorageMultisample2dArrayOES && extensions->multiviewOVR;
 
     extensions->textureMultisampleANGLE = functions->isAtLeastGL(gl::Version(3, 2)) ||
                                           functions->hasGLExtension("GL_ARB_texture_multisample") ||
@@ -1931,9 +1940,8 @@ void GenerateCaps(const FunctionsGL *functions,
 
     // EXT_blend_func_extended is not implemented on top of ARB_blend_func_extended
     // because the latter does not support fragment shader output layout qualifiers.
-    extensions->blendFuncExtendedEXT = !features.disableBlendFuncExtended.enabled &&
-                                       (functions->isAtLeastGL(gl::Version(3, 3)) ||
-                                        functions->hasGLESExtension("GL_EXT_blend_func_extended"));
+    extensions->blendFuncExtendedEXT = functions->isAtLeastGL(gl::Version(3, 3)) ||
+                                       functions->hasGLESExtension("GL_EXT_blend_func_extended");
     if (extensions->blendFuncExtendedEXT)
     {
         // TODO(http://anglebug.com/40644593): Support greater values of
@@ -1956,25 +1964,26 @@ void GenerateCaps(const FunctionsGL *functions,
          functions->hasGLESExtension("GL_EXT_draw_elements_base_vertex"));
 
     // EXT_base_instance
-    extensions->baseInstanceEXT =
-        !features.disableBaseInstanceVertex.enabled &&
-        (functions->isAtLeastGL(gl::Version(3, 2)) || functions->isAtLeastGLES(gl::Version(3, 2)) ||
-         functions->hasGLESExtension("GL_OES_draw_elements_base_vertex") ||
-         functions->hasGLESExtension("GL_EXT_draw_elements_base_vertex") ||
-         functions->hasGLESExtension("GL_EXT_base_instance"));
+    // Unlike the ANGLE variant, this extension is exposed only if supported natively.
+    extensions->baseInstanceEXT = !features.disableBaseInstanceVertex.enabled &&
+                                  (functions->isAtLeastGL(gl::Version(4, 2)) ||
+                                   functions->hasGLExtension("GL_ARB_base_instance") ||
+                                   functions->hasGLESExtension("GL_EXT_base_instance"));
 
     // ANGLE_base_vertex_base_instance_shader_builtin
     extensions->baseVertexBaseInstanceShaderBuiltinANGLE = extensions->baseVertexBaseInstanceANGLE;
 
     // OES_draw_elements_base_vertex
     extensions->drawElementsBaseVertexOES =
-        functions->isAtLeastGL(gl::Version(3, 2)) || functions->isAtLeastGLES(gl::Version(3, 2)) ||
-        functions->hasGLESExtension("GL_OES_draw_elements_base_vertex");
+        !features.disableBaseInstanceVertex.enabled &&
+        (functions->isAtLeastGL(gl::Version(3, 2)) || functions->isAtLeastGLES(gl::Version(3, 2)) ||
+         functions->hasGLESExtension("GL_OES_draw_elements_base_vertex"));
 
     // EXT_draw_elements_base_vertex
     extensions->drawElementsBaseVertexEXT =
-        functions->isAtLeastGL(gl::Version(3, 2)) || functions->isAtLeastGLES(gl::Version(3, 2)) ||
-        functions->hasGLESExtension("GL_EXT_draw_elements_base_vertex");
+        !features.disableBaseInstanceVertex.enabled &&
+        (functions->isAtLeastGL(gl::Version(3, 2)) || functions->isAtLeastGLES(gl::Version(3, 2)) ||
+         functions->hasGLESExtension("GL_EXT_draw_elements_base_vertex"));
 
     // ANGLE_compressed_texture_etc
     // Expose this extension only when we support the formats or we're running on top of a native
@@ -2295,11 +2304,6 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
 
     ANGLE_FEATURE_CONDITION(features, addAndTrueToLoopCondition, IsApple() && isIntel);
 
-    // Ported from gpu_driver_bug_list.json (#191)
-    ANGLE_FEATURE_CONDITION(
-        features, emulateIsnanFloat,
-        isIntel && IsApple() && IsSkylake(device) && GetMacOSVersion() < OSVersion(10, 13, 2));
-
     // https://anglebug.com/42266803
     ANGLE_FEATURE_CONDITION(features, clearsWithGapsNeedFlush,
                             !isMesa && isQualcomm && qualcommVersion < 490);
@@ -2312,15 +2316,6 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     ANGLE_FEATURE_CONDITION(
         features, useUnusedBlocksWithStandardOrSharedLayout,
         (IsApple() && functions->standard == STANDARD_GL_DESKTOP) || (IsLinux() && isAMD));
-
-    // Ported from gpu_driver_bug_list.json (#187)
-    ANGLE_FEATURE_CONDITION(features, doWhileGLSLCausesGPUHang,
-                            IsApple() && functions->standard == STANDARD_GL_DESKTOP &&
-                                GetMacOSVersion() < OSVersion(10, 11, 0));
-
-    // Ported from gpu_driver_bug_list.json (#211)
-    ANGLE_FEATURE_CONDITION(features, rewriteFloatUnaryMinusOperator,
-                            IsApple() && isIntel && GetMacOSVersion() < OSVersion(10, 12, 0));
 
     ANGLE_FEATURE_CONDITION(features, vertexIDDoesNotIncludeBaseVertex, IsApple() && isAMD);
 
@@ -2371,10 +2366,6 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     ANGLE_FEATURE_CONDITION(features, dontUseLoopsToInitializeVariables,
                             (!isMesa && isQualcomm) || (isIntel && IsApple()));
 
-    // Intel macOS condition ported from gpu_driver_bug_list.json (#327)
-    ANGLE_FEATURE_CONDITION(features, disableBlendFuncExtended,
-                            IsApple() && isIntel && GetMacOSVersion() < OSVersion(10, 14, 0));
-
     ANGLE_FEATURE_CONDITION(features, avoidBindFragDataLocation, !isMesa && isQualcomm);
 
     ANGLE_FEATURE_CONDITION(features, unsizedSRGBReadPixelsDoesntTransform, !isMesa && isQualcomm);
@@ -2397,6 +2388,11 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
 
     ANGLE_FEATURE_CONDITION(features, allowClearForRobustResourceInit, IsApple());
 
+    // NVidia and PowerVR Rogue report MAX_COMBINED_SHADER_OUTPUT_RESOURCES incorrectly.
+    // Force it to the sum of all sublimits.
+    ANGLE_FEATURE_CONDITION(features, forceMaxCombinedShaderOutputResources,
+                            isNvidia || IsPowerVrRogue(functions));
+
     // The WebGL conformance/uniforms/out-of-bounds-uniform-array-access test has been seen to fail
     // on AMD and Android devices.
     // This test is also flaky on Linux Nvidia. So we just turn it on everywhere and don't rely on
@@ -2407,9 +2403,6 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
 
     ANGLE_FEATURE_CONDITION(features, resetTexImage2DBaseLevel,
                             IsApple() && isIntel && GetMacOSVersion() >= OSVersion(10, 12, 4));
-
-    ANGLE_FEATURE_CONDITION(features, clearToZeroOrOneBroken,
-                            IsApple() && isIntel && GetMacOSVersion() < OSVersion(10, 12, 6));
 
     ANGLE_FEATURE_CONDITION(features, adjustSrcDstRegionForBlitFramebuffer,
                             IsLinux() || (IsAndroid() && isNvidia) || (IsWindows() && isNvidia) ||
@@ -2665,8 +2658,10 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
                             functions->standard == STANDARD_GL_ES && isMesa &&
                                 mesaVersion < (std::array<int, 3>{23, 1, 7}));
 
-    // http://anglebug.com/42266610
-    ANGLE_FEATURE_CONDITION(features, disableBaseInstanceVertex, IsMaliValhall(functions));
+    // Mali bug: http://anglebug.com/42266610
+    // Linux speculative bugs: http://crbug.com/427956856, http://anglebug.com/431097618
+    ANGLE_FEATURE_CONDITION(features, disableBaseInstanceVertex,
+                            IsMaliValhall(functions) || IsLinux());
 
     // Mali: http://crbug.com/40063287
     // Nvidia: http://crbug.com/328015191
@@ -2707,6 +2702,11 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     ANGLE_FEATURE_CONDITION(
         features, disableBlendEquationAdvanced,
         (isIntel && IsWindows()) || IsAdreno4xx(functions) || IsAdreno5xx(functions) || isMali);
+
+    // Adreno drivers cache some internal values based on glSampleCoverage and
+    // number of samples in currently bound FBO and require to reset sample
+    // coverage each time FBO changes.
+    ANGLE_FEATURE_CONDITION(features, resetSampleCoverageOnFBOChange, isQualcomm);
 }
 
 void InitializeFrontendFeatures(const FunctionsGL *functions, angle::FrontendFeatures *features)
@@ -2734,6 +2734,14 @@ void InitializeFrontendFeatures(const FunctionsGL *functions, angle::FrontendFea
     ANGLE_FEATURE_CONDITION(features, linkJobIsThreadSafe, false);
 
     ANGLE_FEATURE_CONDITION(features, cacheCompiledShader, true);
+
+    // GL_EXT_clip_cull_distance and GL_NV_shader_noperspective_interpolation are broken on QCOM
+    // without ANGLE workarounds: the former does not allow built-in redeclarations outside of
+    // interface blocks and the latter does not compile unless the shader version is at least 310
+    // es.
+    ANGLE_FEATURE_CONDITION(features, clipCullDistanceBrokenWithPassthroughShaders, isQualcomm);
+    ANGLE_FEATURE_CONDITION(features, noperspectiveInterpolationBrokenWithPassthroughShaders,
+                            isQualcomm);
 }
 
 void ReInitializeFeaturesAtGPUSwitch(const FunctionsGL *functions, angle::FeaturesGL *features)
@@ -2786,12 +2794,6 @@ bool SupportsCompute(const FunctionsGL *functions)
             (functions->isAtLeastGL(gl::Version(4, 2)) &&
              functions->hasGLExtension("GL_ARB_compute_shader") &&
              functions->hasGLExtension("GL_ARB_shader_storage_buffer_object")));
-}
-
-bool SupportsFenceSync(const FunctionsGL *functions)
-{
-    return functions->isAtLeastGL(gl::Version(3, 2)) || functions->hasGLExtension("GL_ARB_sync") ||
-           functions->isAtLeastGLES(gl::Version(3, 0));
 }
 
 bool SupportsOcclusionQueries(const FunctionsGL *functions)

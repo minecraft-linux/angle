@@ -7,6 +7,10 @@
 // EGLReadinessCheckTest.cpp:
 //      Tests used to check environment in which other tests are run.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 #include <gtest/gtest.h>
 
 #include "gpu_info_util/SystemInfo.h"
@@ -27,22 +31,29 @@ TEST_P(EGLReadinessCheckTest, IsRunningOnANGLE)
 }
 
 // Checks that getting function pointer works
-TEST_P(EGLReadinessCheckTest, HasGetPlatformDisplayEXT)
+TEST_P(EGLReadinessCheckTest, HasGetPlatformDisplay)
 {
-    ASSERT_NE(eglGetPlatformDisplayEXT, nullptr);
+    ASSERT_NE(eglGetPlatformDisplay, nullptr);
 }
 
-// Checks that calling GetProcAddress for a non-existant function fails.
+// Checks that calling GetProcAddress for a non-existent function fails.
 TEST_P(EGLReadinessCheckTest, GetProcAddressNegativeTest)
 {
     auto check = eglGetProcAddress("WigglyWombats");
     EXPECT_EQ(nullptr, check);
 }
 
+// Checks that calling GetProcAddress for a null pointer function fails.
+TEST_P(EGLReadinessCheckTest, GetProcAddressNullInput)
+{
+    auto check = eglGetProcAddress(nullptr);
+    EXPECT_EQ(nullptr, check);
+}
+
 // Tests that our allowlist function generally maps to our support function.
 // We can add specific exceptions here if needed.
 // Disabled because it was creating a large number of configs. This could even result
-// in a BDOD on Windows.
+// in a BSOD on Windows.
 TEST_P(EGLReadinessCheckTest, DISABLED_AllowlistMatchesSupport)
 {
     // Has issues with Vulkan support detection on Android.

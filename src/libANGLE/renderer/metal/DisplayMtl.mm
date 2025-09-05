@@ -6,6 +6,10 @@
 
 // DisplayMtl.mm: Metal implementation of DisplayImpl
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/metal/DisplayMtl.h"
 #include <sys/param.h>
 
@@ -746,15 +750,7 @@ void DisplayMtl::ensureCapsInitialized() const
     // Metal-Feature-Set-Tables.pdf says that max supported point size is 511. We limit it to 64
     // for now. http://anglebug.com/42263403
 
-    // NOTE(kpiddington): This seems to be fixed in macOS Monterey
-    if (@available(macOS 12.0, *))
-    {
-        mNativeCaps.maxAliasedPointSize = 511;
-    }
-    else
-    {
-        mNativeCaps.maxAliasedPointSize = 64;
-    }
+    mNativeCaps.maxAliasedPointSize = 511;
     mNativeCaps.minAliasedLineWidth = 1.0f;
     mNativeCaps.maxAliasedLineWidth = 1.0f;
 
@@ -1051,9 +1047,6 @@ void DisplayMtl::initializeExtensions() const
 
         // GL_OES_EGL_sync
         mNativeExtensions.EGLSyncOES = true;
-
-        // GL_ARB_sync
-        mNativeExtensions.syncARB = true;
     }
 
     // GL_KHR_parallel_shader_compile
@@ -1063,6 +1056,9 @@ void DisplayMtl::initializeExtensions() const
     mNativeExtensions.baseVertexBaseInstanceANGLE = mFeatures.hasBaseVertexInstancedDraw.enabled;
     mNativeExtensions.baseVertexBaseInstanceShaderBuiltinANGLE =
         mFeatures.hasBaseVertexInstancedDraw.enabled;
+
+    mNativeExtensions.drawElementsBaseVertexEXT = mFeatures.hasBaseVertexInstancedDraw.enabled;
+    mNativeExtensions.drawElementsBaseVertexOES = mFeatures.hasBaseVertexInstancedDraw.enabled;
 
     // Metal uses the opposite provoking vertex as GLES so emulation is required to use the GLES
     // behaviour. Allow users to change the provoking vertex for improved performance.
@@ -1126,8 +1122,6 @@ void DisplayMtl::initializeExtensions() const
                           gl::IMPLEMENTATION_MAX_PIXEL_LOCAL_STORAGE_PLANES);
             mNativeCaps.maxPixelLocalStoragePlanes =
                 gl::IMPLEMENTATION_MAX_PIXEL_LOCAL_STORAGE_PLANES;
-            mNativeCaps.maxColorAttachmentsWithActivePixelLocalStorage =
-                gl::IMPLEMENTATION_MAX_DRAW_BUFFERS;
             mNativeCaps.maxCombinedDrawBuffersAndPixelLocalStoragePlanes =
                 gl::IMPLEMENTATION_MAX_PIXEL_LOCAL_STORAGE_PLANES +
                 gl::IMPLEMENTATION_MAX_DRAW_BUFFERS;
@@ -1247,11 +1241,6 @@ void DisplayMtl::initializeFeatures()
                             supportsAppleGPUFamily(1) && !isSimulator);
     ANGLE_FEATURE_CONDITION((&mFeatures), emulateTransformFeedback, true);
 
-    ANGLE_FEATURE_CONDITION((&mFeatures), intelExplicitBoolCastWorkaround,
-                            isIntel() && GetMacOSVersion() < OSVersion(11, 0, 0));
-    ANGLE_FEATURE_CONDITION((&mFeatures), intelDisableFastMath,
-                            isIntel() && GetMacOSVersion() < OSVersion(12, 0, 0));
-
     ANGLE_FEATURE_CONDITION((&mFeatures), emulateAlphaToCoverage,
                             isSimulator || !supportsAppleGPUFamily(1));
 
@@ -1320,9 +1309,14 @@ void DisplayMtl::initializeFeatures()
 
     // Metal compiler optimizations may remove infinite loops causing crashes later in shader
     // execution. http://crbug.com/1513738
-    // Disabled on Mac11 due to test failures. http://crbug.com/1522730
+    ANGLE_FEATURE_CONDITION((&mFeatures), ensureLoopForwardProgress, false);
+
+    // Once not used, injectAsmStatementIntoLoopBodies should be removed and
+    // ensureLoopForwardProgress should default to true.
+    // http://crbug.com/1522730
+    bool shouldUseInjectAsmIntoLoopBodies = !mFeatures.ensureLoopForwardProgress.enabled;
     ANGLE_FEATURE_CONDITION((&mFeatures), injectAsmStatementIntoLoopBodies,
-                            !isOSX || GetMacOSVersion() >= OSVersion(12, 0, 0));
+                            shouldUseInjectAsmIntoLoopBodies);
 }
 
 angle::Result DisplayMtl::initializeShaderLibrary()

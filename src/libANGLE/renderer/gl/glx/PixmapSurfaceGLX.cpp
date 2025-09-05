@@ -143,7 +143,7 @@ egl::Error PixmapSurfaceGLX::makeCurrent(const gl::Context *context)
     return egl::NoError();
 }
 
-egl::Error PixmapSurfaceGLX::swap(const gl::Context *context)
+egl::Error PixmapSurfaceGLX::swap(const gl::Context *context, SurfaceSwapFeedback *feedback)
 {
     UNREACHABLE();
     return egl::NoError();
@@ -182,14 +182,9 @@ egl::Error PixmapSurfaceGLX::releaseTexImage(const gl::Context *context, EGLint 
 
 void PixmapSurfaceGLX::setSwapInterval(const egl::Display *display, EGLint interval) {}
 
-EGLint PixmapSurfaceGLX::getWidth() const
+gl::Extents PixmapSurfaceGLX::getSize() const
 {
-    return mWidth;
-}
-
-EGLint PixmapSurfaceGLX::getHeight() const
-{
-    return mHeight;
+    return gl::Extents(mWidth, mHeight, 1);
 }
 
 EGLint PixmapSurfaceGLX::isPostSubBufferSupported() const

@@ -16,9 +16,28 @@ namespace sh
 
 const char kDefaultUniformBlockVarType[]           = "ANGLE_DefaultUniformBlock";
 const char kDefaultUniformBlockVarName[]           = "ANGLE_defaultUniformBlock";
-const uint32_t kDefaultUniformBlockBindGroup       = 0;
+
+enum WgslBindGroupNumbers : uint32_t
+{
+    kDefaultUniformBlockBindGroup = 0,
+    kTextureAndSamplerBindGroup   = 1,
+    kDriverUniformBindGroup       = 2,
+    kMaxBindGroup                 = 2
+};
+
 const uint32_t kDefaultVertexUniformBlockBinding   = 0;
 const uint32_t kDefaultFragmentUniformBlockBinding = 1;
+
+const uint32_t kDriverUniformBlockBinding = 0;
+
+// The translator emits this dummy location, which needs to be replaced when linking the two
+// separate shader stages.
+const char kTextureSamplerBindingMarker[] = "@group(1) @binding(@@@@@@) var ";
+// The translator emits split samplers/textures for GLSL's combined textures/samplers (combined
+// textures/samplers are not supported by WGSL). The new variables are prefixed with these
+// constants, respectively.
+const char kAngleSamplerPrefix[] = "ANGLE_sampler_";
+const char kAngleTexturePrefix[] = "ANGLE_texture_";
 
 const char kWrappedStructFieldName[] = "elem";
 
@@ -72,9 +91,23 @@ bool IsMatCx2(const TType *type);
 ImmutableString MakeUnwrappingArrayConversionFunctionName(const TType *type);
 ImmutableString MakeMatCx2ConversionFunctionName(const TType *type);
 
+// Bools and bvecN are represented in WGSL's uniform address space with u32 and uvecN respectively.
+// This outputs the beginning of a conversion necessary to convert the bool or bvecN represented by
+// `type` into an actual WGSL bool or vecN<bool>. E.g. for regular bools this will output `bool(`.
+// The caller is responsible for closing the parentheses, e.g. output <<
+// "uniforms.bool_represented_by_u32)";
+bool OutputUniformBoolOrBvecConversion(TInfoSinkBase &output, const TType &type);
+
 // TODO(anglebug.com/42267100): for now does not output all uniform blocks,
-// just the default block. (fails for  matCx2, bool.)
-bool OutputUniformBlocks(TCompiler *compiler, TIntermBlock *root);
+// just the default block.
+// `uniformBlock` is the variable declaring an interface block of default uniforms.
+bool OutputUniformBlocksAndSamplers(TCompiler *compiler,
+                                    TIntermBlock *root,
+                                    const TVariable *defaultUniformBlock);
+
+// GLSL sampler uniforms are extracted from structs. Given a GLSL sampler's associated name string,
+// this function retrieves its new WGSL name and strips off array indices.
+std::string WGSLGetMappedSamplerName(const std::string &originalName);
 
 }  // namespace sh
 

@@ -6,6 +6,10 @@
 
 // ProgramD3D.cpp: Defines the rx::ProgramD3D class which implements rx::ProgramImpl.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/ProgramD3D.h"
 
 #include "common/MemoryBuffer.h"
@@ -200,7 +204,7 @@ bool ProgramD3DMetadata::usesBroadcast(const gl::Version &clientVersion) const
 {
     const SharedCompiledShaderStateD3D &shader = mAttachedShaders[gl::ShaderType::Fragment];
     return shader && shader->usesFragColor && shader->usesMultipleRenderTargets &&
-           clientVersion.major < 3;
+           clientVersion < gl::ES_3_0;
 }
 
 bool ProgramD3DMetadata::usesSecondaryColor() const

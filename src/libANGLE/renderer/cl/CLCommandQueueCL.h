@@ -188,7 +188,7 @@ class CLCommandQueueCL : public CLCommandQueueImpl
                                       void *args,
                                       size_t cbArgs,
                                       const cl::BufferPtrs &buffers,
-                                      const std::vector<size_t> bufferPtrOffsets,
+                                      const std::vector<size_t> &bufferPtrOffsets,
                                       const cl::EventPtrs &waitEvents,
                                       CLEventImpl::CreateFunc *eventCreateFunc) override;
 
@@ -206,6 +206,16 @@ class CLCommandQueueCL : public CLCommandQueueImpl
 
     angle::Result flush() override;
     angle::Result finish() override;
+
+    angle::Result enqueueAcquireExternalMemObjectsKHR(
+        const cl::MemoryPtrs &memObjects,
+        const cl::EventPtrs &waitEvents,
+        CLEventImpl::CreateFunc *eventCreateFunc) override;
+
+    angle::Result enqueueReleaseExternalMemObjectsKHR(
+        const cl::MemoryPtrs &memObjects,
+        const cl::EventPtrs &waitEvents,
+        CLEventImpl::CreateFunc *eventCreateFunc) override;
 
   private:
     const cl_command_queue mNative;

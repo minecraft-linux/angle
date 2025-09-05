@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/Caps.h"
 
 #include "common/angleutils.h"
@@ -77,8 +81,7 @@ TextureCaps GenerateMinimumTextureCaps(GLenum sizedInternalFormat,
     caps.sampleCounts.insert(0);
     if (internalFormatInfo.isRequiredRenderbufferFormat(clientVersion))
     {
-        if ((clientVersion.major >= 3 && clientVersion.minor >= 1) ||
-            (clientVersion.major >= 3 && !internalFormatInfo.isInt()))
+        if (clientVersion >= ES_3_1 || (clientVersion == ES_3_0 && !internalFormatInfo.isInt()))
         {
             caps.sampleCounts.insert(4);
         }
@@ -305,6 +308,7 @@ static bool DetermineRGB8TextureSupport(const TextureCapsMap &textureCaps)
 static bool DetermineBGRA8TextureSupport(const TextureCapsMap &textureCaps)
 {
     constexpr GLenum requiredFormats[] = {
+        GL_BGRA_EXT,
         GL_BGRA8_EXT,
     };
 
@@ -1400,6 +1404,9 @@ std::vector<std::string> DisplayExtensions::getStrings() const
     InsertExtensionString("EGL_ANGLE_global_fence_sync",                         globalFenceSyncANGLE,               &extensionStrings);
     InsertExtensionString("EGL_ANGLE_memory_usage_report",                       memoryUsageReportANGLE,             &extensionStrings);
     InsertExtensionString("EGL_EXT_surface_compression",                         surfaceCompressionEXT,              &extensionStrings);
+    InsertExtensionString("EGL_ANGLE_webgpu_texture_client_buffer",              webgpuTextureClientBuffer,          &extensionStrings);
+    InsertExtensionString("EGL_ANGLE_create_context_passthrough_shaders",        createContextPassthroughShadersANGLE, &extensionStrings);
+    InsertExtensionString("EGL_NV_context_priority_realtime",                    contextPriorityRealtimeNV,          &extensionStrings);
     // clang-format on
 
     return extensionStrings;
@@ -1421,6 +1428,7 @@ std::vector<std::string> DeviceExtensions::getStrings() const
     InsertExtensionString("EGL_ANGLE_device_vulkan",                       deviceVulkan,                   &extensionStrings);
     InsertExtensionString("EGL_EXT_device_drm",                            deviceDrmEXT,                   &extensionStrings);
     InsertExtensionString("EGL_EXT_device_drm_render_node",                deviceDrmRenderNodeEXT,         &extensionStrings);
+    InsertExtensionString("EGL_ANGLE_device_webgpu",                       deviceWebGPU,                   &extensionStrings);
 
     // clang-format on
 

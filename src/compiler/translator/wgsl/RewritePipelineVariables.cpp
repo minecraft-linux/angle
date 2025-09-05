@@ -218,7 +218,103 @@ class RewritePipelineVarOutputBuilder
         const GlobalVars &globalVars,
         TCompiler &compiler,
         IOType ioType,
-        std::string debugString);
+        const std::string &debugString);
+
+    static bool GenerateForBuiltinVar(RewritePipelineVarOutput::WgslIOBlock *ioblock,
+                                      RewritePipelineVarOutput::RewrittenVarSet *varsToReplace,
+                                      ImmutableString toStruct,
+                                      ImmutableString fromStruct,
+                                      TCompiler &compiler,
+                                      IOType ioType,
+                                      const std::string &shaderVarName)
+    {
+
+        GlslToWgslBuiltinMapping wgslName;
+        if (!GetWgslBuiltinName(shaderVarName, compiler.getShaderType(), &wgslName))
+        {
+            return false;
+        }
+
+        const TVariable *varToReplace = wgslName.builtinVar;
+
+        if (varToReplace == nullptr)
+        {
+            // Should be declared somewhere as a symbol.
+            // TODO(anglebug.com/42267100): Not sure if this ever actually occurs. Will this
+            // TVariable also have a declaration? Are there any gl_ variable that require or
+            // even allow declaration?
+            varToReplace = static_cast<const TVariable *>(compiler.getSymbolTable().findBuiltIn(
+                ImmutableString(wgslName.glslBuiltinName), compiler.getShaderVersion()));
+            if (kOutputVariableUses)
+            {
+                std::cout << "Var " << shaderVarName
+                          << " did not have a BuiltIn var but does have a builtin in the symbol "
+                             "table"
+                          << std::endl;
+            }
+        }
+
+        ASSERT(ioType == wgslName.ioType);
+
+        varsToReplace->insert(varToReplace->uniqueId().get());
+
+        ImmutableString builtinReplacement = CreateNameToReplaceBuiltin(wgslName.glslBuiltinName);
+
+        // E.g. `gl_VertexID_ : i32`.
+        ImmutableString globalType = wgslName.wgslTypeExpectedByShader.empty()
+                                         ? wgslName.wgslBuiltinType
+                                         : wgslName.wgslTypeExpectedByShader;
+        ImmutableString globalStructVar =
+            BuildConcatenatedImmutableString(builtinReplacement, " : ", globalType, ",");
+        ioblock->angleGlobalMembers.push_back(globalStructVar);
+
+        if (auto *builtinAnnotation =
+                std::get_if<BuiltinAnnotation>(&wgslName.wgslPipelineAnnotation))
+        {
+            // E.g. `@builtin(vertex_index) gl_VertexID_ : u32,`.
+            const char *builtinAnnotationStart = "@builtin(";
+            const char *builtinAnnotationEnd   = ") ";
+            ImmutableString annotatedStructVar = BuildConcatenatedImmutableString(
+                builtinAnnotationStart, builtinAnnotation->wgslBuiltinName, builtinAnnotationEnd,
+                builtinReplacement, " : ", wgslName.wgslBuiltinType, ",");
+            ioblock->angleAnnotatedMembers.push_back(annotatedStructVar);
+        }
+        else if (auto *locationAnnotation =
+                     std::get_if<LocationAnnotation>(&wgslName.wgslPipelineAnnotation))
+        {
+            ASSERT(locationAnnotation->location == 0);
+            // E.g. `@location(0) gl_FragColor_ : vec4<f32>,`.
+            const char *locationAnnotationStr  = "@location(0) ";
+            ImmutableString annotatedStructVar = BuildConcatenatedImmutableString(
+                locationAnnotationStr, builtinReplacement, " : ", wgslName.wgslBuiltinType, ",");
+            ioblock->angleAnnotatedMembers.push_back(annotatedStructVar);
+        }
+        else
+        {
+            ASSERT(std::get_if<NoAnnotation>(&wgslName.wgslPipelineAnnotation));
+        }
+
+        if (!std::get_if<NoAnnotation>(&wgslName.wgslPipelineAnnotation))
+        {
+            // E.g. `ANGLE_input_global.gl_VertexID_ = u32(ANGLE_input_annotated.gl_VertexID_);`
+            ImmutableString conversion(nullptr);
+            if (wgslName.conversionFunc.empty())
+            {
+                conversion =
+                    BuildConcatenatedImmutableString(toStruct, ".", builtinReplacement, " = ",
+                                                     fromStruct, ".", builtinReplacement, ";");
+            }
+            else
+            {
+                conversion = BuildConcatenatedImmutableString(
+                    toStruct, ".", builtinReplacement, " = ", wgslName.conversionFunc, "(",
+                    fromStruct, ".", builtinReplacement, ");");
+            }
+            ioblock->angleConversionFuncs.push_back(conversion);
+        }
+
+        return true;
+    }
 };
 
 // Given a list of `shaderVars` (as well as `compiler` and a list of global variables in the GLSL
@@ -241,7 +337,7 @@ class RewritePipelineVarOutputBuilder
     const GlobalVars &globalVars,
     TCompiler &compiler,
     IOType ioType,
-    std::string debugString)
+    const std::string &debugString)
 {
     for (const ShaderVariable &shaderVar : shaderVars)
     {
@@ -261,91 +357,10 @@ class RewritePipelineVarOutputBuilder
 
         if (shaderVar.isBuiltIn())
         {
-            GlslToWgslBuiltinMapping wgslName;
-            if (!GetWgslBuiltinName(shaderVar.name, compiler.getShaderType(), &wgslName))
+            if (!GenerateForBuiltinVar(ioblock, varsToReplace, toStruct, fromStruct, compiler,
+                                       ioType, shaderVar.name))
             {
                 return false;
-            }
-
-            const TVariable *varToReplace = wgslName.builtinVar;
-
-            if (varToReplace == nullptr)
-            {
-                // Should be declared somewhere as a symbol.
-                // TODO(anglebug.com/42267100): Not sure if this ever actually occurs. Will this
-                // TVariable also have a declaration? Are there any gl_ variable that require or
-                // even allow declaration?
-                varToReplace = static_cast<const TVariable *>(compiler.getSymbolTable().findBuiltIn(
-                    ImmutableString(wgslName.glslBuiltinName), compiler.getShaderVersion()));
-                if (kOutputVariableUses)
-                {
-                    std::cout
-                        << "Var " << shaderVar.name
-                        << " did not have a BuiltIn var but does have a builtin in the symbol "
-                           "table"
-                        << std::endl;
-                }
-            }
-
-            ASSERT(ioType == wgslName.ioType);
-
-            varsToReplace->insert(varToReplace->uniqueId().get());
-
-            ImmutableString builtinReplacement =
-                CreateNameToReplaceBuiltin(wgslName.glslBuiltinName);
-
-            // E.g. `gl_VertexID_ : i32`.
-            ImmutableString globalType = wgslName.wgslTypeExpectedByShader.empty()
-                                             ? wgslName.wgslBuiltinType
-                                             : wgslName.wgslTypeExpectedByShader;
-            ImmutableString globalStructVar =
-                BuildConcatenatedImmutableString(builtinReplacement, " : ", globalType, ",");
-            ioblock->angleGlobalMembers.push_back(globalStructVar);
-
-            if (auto *builtinAnnotation =
-                    std::get_if<BuiltinAnnotation>(&wgslName.wgslPipelineAnnotation))
-            {
-                // E.g. `@builtin(vertex_index) gl_VertexID_ : u32,`.
-                const char *builtinAnnotationStart = "@builtin(";
-                const char *builtinAnnotationEnd   = ") ";
-                ImmutableString annotatedStructVar = BuildConcatenatedImmutableString(
-                    builtinAnnotationStart, builtinAnnotation->wgslBuiltinName,
-                    builtinAnnotationEnd, builtinReplacement, " : ", wgslName.wgslBuiltinType, ",");
-                ioblock->angleAnnotatedMembers.push_back(annotatedStructVar);
-            }
-            else if (auto *locationAnnotation =
-                         std::get_if<LocationAnnotation>(&wgslName.wgslPipelineAnnotation))
-            {
-                ASSERT(locationAnnotation->location == 0);
-                // E.g. `@location(0) gl_FragColor_ : vec4<f32>,`.
-                const char *locationAnnotationStr = "@location(0) ";
-                ImmutableString annotatedStructVar =
-                    BuildConcatenatedImmutableString(locationAnnotationStr, builtinReplacement,
-                                                     " : ", wgslName.wgslBuiltinType, ",");
-                ioblock->angleAnnotatedMembers.push_back(annotatedStructVar);
-            }
-            else
-            {
-                ASSERT(std::get_if<NoAnnotation>(&wgslName.wgslPipelineAnnotation));
-            }
-
-            if (!std::get_if<NoAnnotation>(&wgslName.wgslPipelineAnnotation))
-            {
-                // E.g. `ANGLE_input_global.gl_VertexID_ = u32(ANGLE_input_annotated.gl_VertexID_);`
-                ImmutableString conversion(nullptr);
-                if (wgslName.conversionFunc.empty())
-                {
-                    conversion =
-                        BuildConcatenatedImmutableString(toStruct, ".", builtinReplacement, " = ",
-                                                         fromStruct, ".", builtinReplacement, ";");
-                }
-                else
-                {
-                    conversion = BuildConcatenatedImmutableString(
-                        toStruct, ".", builtinReplacement, " = ", wgslName.conversionFunc, "(",
-                        fromStruct, ".", builtinReplacement, ");");
-                }
-                ioblock->angleConversionFuncs.push_back(conversion);
             }
         }
         else
@@ -356,7 +371,13 @@ class RewritePipelineVarOutputBuilder
                 continue;
             }
 
-            TIntermDeclaration *declNode = globalVars.find(shaderVar.name)->second;
+            auto globalVarIt = globalVars.find(shaderVar.name);
+            if (globalVarIt == globalVars.end())
+            {
+                ANGLE_LOG(ERR) << "Should have found " << shaderVar.name << " in global vars";
+                return false;
+            }
+            TIntermDeclaration *declNode = globalVarIt->second;
             const TVariable *astVar      = &ViewDeclaration(*declNode).symbol.variable();
 
             const ImmutableString &userVarName = astVar->name();
@@ -371,16 +392,95 @@ class RewritePipelineVarOutputBuilder
                 BuildConcatenatedImmutableString(userVarName, " : ", type.c_str(), ",");
             ioblock->angleGlobalMembers.push_back(globalStructVar);
 
-            // E.g. `@location(@@@@@@) _uuserVar : i32,`.
-            const char *locationAnnotationStr = "@location(@@@@@@) ";
-            ImmutableString annotatedStructVar =
-                BuildConcatenatedImmutableString(locationAnnotationStr, globalStructVar);
-            ioblock->angleAnnotatedMembers.push_back(annotatedStructVar);
+            if (astVar->getType().isArray())
+            {
+                // TODO(anglebug.com/42267100): need to support arrays (of scalars, vectors, and
+                // matrices, maybe structs).
+                ANGLE_LOG(ERR) << "Shader in/out variables of array type currently not supported.";
+                return false;
+            }
+            else if (astVar->getType().isMatrix())
+            {
+                // E.g.
+                // @location(@@@@@@) outMatArr_col0 : vec3<f32>,
+                // @location(@@@@@@) outMatArr_col1 : vec3<f32>,
+                // @location(@@@@@@) outMatArr_col2 : vec3<f32>,
 
-            // E.g. `ANGLE_input_global._uuserVar = ANGLE_input_annotated._uuserVar;`
-            ImmutableString conversion = BuildConcatenatedImmutableString(
-                toStruct, ".", userVarName, " = ", fromStruct, ".", userVarName, ";");
-            ioblock->angleConversionFuncs.push_back(conversion);
+                TStringStream colVarList;
+
+                // To the input/output struct, add one vector variable per matrix column.
+                uint8_t cols = astVar->getType().getCols();
+                for (uint8_t i = 0; i < cols; i++)
+                {
+                    const char *locationAnnotationStr = "@location(@@@@@@) ";
+
+                    TStringStream rowVecTypeStream;
+                    TType rowVecAstType = astVar->getType();
+                    rowVecAstType.toMatrixColumnType();
+                    WriteWgslType(rowVecTypeStream, rowVecAstType, {});
+                    TString rowVecType = rowVecTypeStream.str();
+
+                    ImmutableString colVarName =
+                        BuildConcatenatedImmutableString(userVarName, "_col", i);
+
+                    if (ioType == IOType::Input)
+                    {
+                        colVarList << fromStruct << "." << colVarName;
+                        if (i != cols - 1)
+                        {
+                            colVarList << ", ";
+                        }
+                    }
+
+                    // Add a column vec to the WGSL in/out block.
+                    ImmutableString annotatedStructVar = BuildConcatenatedImmutableString(
+                        locationAnnotationStr, colVarName, " : ", rowVecType.c_str(), ",");
+                    ioblock->angleAnnotatedMembers.push_back(annotatedStructVar);
+
+                    // When outputting matrices, they need to be split into column vectors which are
+                    // then placed in the WGSL in/out block.
+                    if (ioType == IOType::Output)
+                    {
+                        // e.g.
+                        // ANGLE_output_annotated.outMatArr_col0 = ANGLE_output_global.outMatArr[0];
+                        // ANGLE_output_annotated.outMatArr_col1 = ANGLE_output_global.outMatArr[1];
+                        // ANGLE_output_annotated.outMatArr_col2 = ANGLE_output_global.outMatArr[2];
+                        ImmutableString extractColVec = BuildConcatenatedImmutableString(
+                            toStruct, '.', colVarName, " = ", fromStruct, '.', userVarName, '[', i,
+                            "];");
+                        ioblock->angleConversionFuncs.push_back(extractColVec);
+                    }
+                }
+
+                // If input, construct the global matrix var from the column vectors in the WGSL
+                // input block.
+                if (ioType == IOType::Input)
+                {
+                    // e.g. ANGLE_input_global.inMat = mat3x3<f32>(ANGLE_input_annotated.inMat_col0,
+                    // ANGLE_input_annotated.inMat_col1, ANGLE_input_annotated.inMat_col2);
+                    ImmutableString conversion = BuildConcatenatedImmutableString(
+                        toStruct, ".", userVarName, " = ", type.c_str(), '(',
+                        colVarList.str().c_str(), ");");
+                    ioblock->angleConversionFuncs.push_back(conversion);
+                }
+            }
+            else
+            {
+                // The only two types supported natively by WGSL are scalars and vectors.
+                ASSERT((astVar->getType().isVector() || astVar->getType().isScalar()) &&
+                       !astVar->getType().isArray());
+
+                // E.g. `@location(@@@@@@) _uuserVar : i32,`.
+                const char *locationAnnotationStr = "@location(@@@@@@) ";
+                ImmutableString annotatedStructVar =
+                    BuildConcatenatedImmutableString(locationAnnotationStr, globalStructVar);
+                ioblock->angleAnnotatedMembers.push_back(annotatedStructVar);
+
+                // E.g. `ANGLE_input_global._uuserVar = ANGLE_input_annotated._uuserVar;`
+                ImmutableString conversion = BuildConcatenatedImmutableString(
+                    toStruct, ".", userVarName, " = ", fromStruct, ".", userVarName, ";");
+                ioblock->angleConversionFuncs.push_back(conversion);
+            }
         }
     }
 
@@ -393,6 +493,34 @@ bool RewritePipelineVarOutputBuilder::GenerateMainFunctionAndIOStructs(
     RewritePipelineVarOutput &outVarReplacements)
 {
     GlobalVars globalVars = FindGlobalVars(&root);
+
+    // The Dawn WGSL compiler generates an error if there is no builtin(position) variable in a
+    // vertex shader, though it doesn't look like the WGSL spec requires this. GLSL doesn't require
+    // use of gl_Position (only that its value is undefined if not written to). So, generate a
+    // @builtin(position) variable by pretending gl_Position is present even if it's not.
+    if (compiler.getShaderType() == GL_VERTEX_SHADER)
+    {
+        bool hasPosition = false;
+        for (const ShaderVariable &shaderVar : compiler.getOutputVaryings())
+        {
+            if (shaderVar.name == std::string("gl_Position"))
+            {
+                hasPosition = true;
+            }
+        }
+
+        if (!hasPosition)
+        {
+            if (!GenerateForBuiltinVar(
+                    &outVarReplacements.mOutputBlock, &outVarReplacements.mAngleOutputVars,
+                    /*toStruct=*/ImmutableString(kBuiltinOutputAnnotatedStructName),
+                    /*fromStruct=*/ImmutableString(kBuiltinOutputStructName), compiler,
+                    IOType::Output, "gl_Position"))
+            {
+                return false;
+            }
+        }
+    }
 
     if (!RewritePipelineVarOutputBuilder::GeneratePipelineStructStrings(
             &outVarReplacements.mInputBlock, &outVarReplacements.mAngleInputVars,
@@ -506,7 +634,7 @@ bool RewritePipelineVarOutput::OutputMainFunction(TInfoSinkBase &output)
     {
         output << "  " << conversionFunc << "\n";
     }
-    output << "  " << kUserDefinedNamePrefix << "main()" << ";\n";
+    output << "  " << '_' << kUserDefinedNamePrefix << "main()" << ";\n";
 
     if (!mOutputBlock.angleGlobalMembers.empty())
     {

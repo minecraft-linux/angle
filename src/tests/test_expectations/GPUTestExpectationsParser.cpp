@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "GPUTestExpectationsParser.h"
 
 #include <stddef.h>
@@ -61,6 +65,8 @@ enum Token
     kConfigIntel,
     kConfigVMWare,
     kConfigApple,
+    kConfigQualcomm,
+    kConfigARM,
     // build type
     kConfigRelease,
     kConfigDebug,
@@ -73,6 +79,7 @@ enum Token
     kConfigSwiftShader,
     kConfigMetal,
     kConfigWgpu,
+    kConfigNative,
     // Android devices
     kConfigNexus5X,
     kConfigPixel2,
@@ -185,6 +192,8 @@ constexpr TokenInfo kTokenData[kNumberOfTokens] = {
     {"intel", GPUTestConfig::kConditionIntel},
     {"vmware", GPUTestConfig::kConditionVMWare},
     {"apple", GPUTestConfig::kConditionApple},
+    {"qualcomm", GPUTestConfig::kConditionQualcomm},
+    {"arm", GPUTestConfig::kConditionARM},
     {"release", GPUTestConfig::kConditionRelease},
     {"debug", GPUTestConfig::kConditionDebug},
     {"d3d9", GPUTestConfig::kConditionD3D9},
@@ -192,6 +201,7 @@ constexpr TokenInfo kTokenData[kNumberOfTokens] = {
     {"opengl", GPUTestConfig::kConditionGLDesktop},
     {"gles", GPUTestConfig::kConditionGLES},
     {"vulkan", GPUTestConfig::kConditionVulkan},
+    {"native", GPUTestConfig::kConditionNative},
     {"swiftshader", GPUTestConfig::kConditionSwiftShader},
     {"metal", GPUTestConfig::kConditionMetal},
     {"wgpu", GPUTestConfig::kConditionWgpu},
@@ -518,6 +528,8 @@ bool GPUTestExpectationsParser::parseLine(const GPUTestConfig *config,
             case kConfigIntel:
             case kConfigVMWare:
             case kConfigApple:
+            case kConfigQualcomm:
+            case kConfigARM:
             case kConfigRelease:
             case kConfigDebug:
             case kConfigD3D9:
@@ -528,6 +540,7 @@ bool GPUTestExpectationsParser::parseLine(const GPUTestConfig *config,
             case kConfigSwiftShader:
             case kConfigMetal:
             case kConfigWgpu:
+            case kConfigNative:
             case kConfigNexus5X:
             case kConfigPixel2:
             case kConfigPixel4:

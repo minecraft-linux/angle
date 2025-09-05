@@ -187,7 +187,7 @@ class CLCommandQueueImpl : angle::NonCopyable
                                               void *args,
                                               size_t cbArgs,
                                               const cl::BufferPtrs &buffers,
-                                              const std::vector<size_t> bufferPtrOffsets,
+                                              const std::vector<size_t> &bufferPtrOffsets,
                                               const cl::EventPtrs &waitEvents,
                                               CLEventImpl::CreateFunc *eventCreateFunc) = 0;
 
@@ -205,6 +205,16 @@ class CLCommandQueueImpl : angle::NonCopyable
 
     virtual angle::Result flush()  = 0;
     virtual angle::Result finish() = 0;
+
+    virtual angle::Result enqueueAcquireExternalMemObjectsKHR(
+        const cl::MemoryPtrs &memObjects,
+        const cl::EventPtrs &waitEvents,
+        CLEventImpl::CreateFunc *eventCreateFunc) = 0;
+
+    virtual angle::Result enqueueReleaseExternalMemObjectsKHR(
+        const cl::MemoryPtrs &memObjects,
+        const cl::EventPtrs &waitEvents,
+        CLEventImpl::CreateFunc *eventCreateFunc) = 0;
 
   protected:
     const cl::CommandQueue &mCommandQueue;

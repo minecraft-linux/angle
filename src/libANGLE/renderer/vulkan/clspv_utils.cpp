@@ -6,6 +6,10 @@
 // Utilities to map clspv interface variables to OpenCL and Vulkan mappings.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/vulkan/clspv_utils.h"
 #include "common/log_utils.h"
 #include "libANGLE/renderer/vulkan/CLDeviceVk.h"
@@ -319,6 +323,61 @@ std::vector<std::string> GetNativeBuiltins(const vk::Renderer *renderer)
 }
 }  // anonymous namespace
 
+namespace clspv_cl
+{
+
+cl::AddressingMode GetAddressingMode(uint32_t mask)
+{
+    cl::AddressingMode addressingMode = cl::AddressingMode::Clamp;
+
+    switch (mask & clspv::kSamplerAddressMask)
+    {
+        case clspv::CLK_ADDRESS_NONE:
+        default:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_NONE));
+            break;
+        case clspv::CLK_ADDRESS_CLAMP_TO_EDGE:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_CLAMP_TO_EDGE));
+            break;
+        case clspv::CLK_ADDRESS_CLAMP:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_CLAMP));
+            break;
+        case clspv::CLK_ADDRESS_MIRRORED_REPEAT:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_MIRRORED_REPEAT));
+            break;
+        case clspv::CLK_ADDRESS_REPEAT:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_REPEAT));
+            break;
+    }
+
+    return addressingMode;
+}
+
+cl::FilterMode GetFilterMode(uint32_t mask)
+{
+    cl::FilterMode filterMode = cl::FilterMode::Nearest;
+
+    switch (mask & clspv::kSamplerFilterMask)
+    {
+        case clspv::CLK_FILTER_NEAREST:
+        default:
+            filterMode = cl::FromCLenum<cl::FilterMode>(static_cast<CLenum>(CL_FILTER_NEAREST));
+            break;
+        case clspv::CLK_FILTER_LINEAR:
+            filterMode = cl::FromCLenum<cl::FilterMode>(static_cast<CLenum>(CL_FILTER_LINEAR));
+            break;
+    }
+
+    return filterMode;
+}
+
+}  // namespace clspv_cl
+
 // Process the data recorded into printf storage buffer along with the info in printfino descriptor
 // and write it to stdout.
 angle::Result ClspvProcessPrintfBuffer(unsigned char *buffer,
@@ -399,6 +458,12 @@ std::string ClspvGetCompilerOptions(const CLDeviceVk *device)
     options += " --enable-printf";
     options += " --cl-kernel-arg-info";
 
+    // check for int8 support
+    if (rendererVk->getFeatures().supportsShaderInt8.enabled)
+    {
+        options += " --int8 --rewrite-packed-structs";
+    }
+
     // 8 bit storage buffer support
     if (!rendererVk->getFeatures().supports8BitStorageBuffer.enabled)
     {
@@ -475,6 +540,12 @@ std::string ClspvGetCompilerOptions(const CLDeviceVk *device)
     if (rendererVk->getEnabledFeatures().features.shaderInt64)
     {
         featureMacros.push_back("__opencl_c_int64");
+    }
+
+    if (rendererVk->getFeatures().supportsShaderIntegerDotProduct.enabled)
+    {
+        featureMacros.push_back("__opencl_c_integer_dot_product_input_4x8bit");
+        featureMacros.push_back("__opencl_c_integer_dot_product_input_4x8bit_packed");
     }
 
     if (!rteModes.empty())

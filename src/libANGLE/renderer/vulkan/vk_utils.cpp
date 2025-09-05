@@ -7,6 +7,10 @@
 //    Helper functions for the Vulkan Renderer.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/vulkan/vk_utils.h"
 
 #include "libANGLE/Context.h"
@@ -641,6 +645,99 @@ angle::Result InitShaderModule(ErrorContext *context,
     return angle::Result::Continue;
 }
 
+angle::Result InitExternalSharedFDMemory(
+    ErrorContext *context,
+    const VkExternalMemoryHandleTypeFlagBits externalMemoryHandleType,
+    const int32_t sharedBufferFD,
+    VkMemoryPropertyFlags memoryProperties,
+    Buffer *buffer,
+    VkMemoryPropertyFlags *memoryPropertyFlagsOut,
+    uint32_t *memoryTypeIndexOut,
+    DeviceMemory *deviceMemoryOut,
+    VkDeviceSize *sizeOut)
+{
+    VkMemoryRequirements externalMemoryRequirements;
+    VkDevice device = context->getRenderer()->getDevice();
+    vkGetBufferMemoryRequirements(device, buffer->getHandle(), &externalMemoryRequirements);
+
+    VkMemoryFdPropertiesKHR memoryFdProperties = {};
+    vkGetMemoryFdPropertiesKHR(device, externalMemoryHandleType, sharedBufferFD,
+                               &memoryFdProperties);
+    externalMemoryRequirements.memoryTypeBits = memoryFdProperties.memoryTypeBits;
+
+    VkImportMemoryFdInfoKHR importMemoryFdInfo = {};
+    importMemoryFdInfo.sType                   = VK_STRUCTURE_TYPE_IMPORT_MEMORY_FD_INFO_KHR;
+    importMemoryFdInfo.handleType              = externalMemoryHandleType;
+    importMemoryFdInfo.fd                      = sharedBufferFD;
+
+    ANGLE_VK_TRY(context, AllocateBufferMemoryWithRequirements(
+                              context, MemoryAllocationType::BufferExternal, memoryProperties,
+                              externalMemoryRequirements, &importMemoryFdInfo, buffer,
+                              memoryPropertyFlagsOut, memoryTypeIndexOut, deviceMemoryOut));
+    *sizeOut = externalMemoryRequirements.size;
+
+    return angle::Result::Continue;
+}
+
+angle::Result GetHostPointerMemoryRequirements(ErrorContext *context,
+                                               void *hostPtr,
+                                               VkMemoryRequirements &memRequirements,
+                                               Buffer *buffer)
+{
+    VkDevice device = context->getRenderer()->getDevice();
+    vkGetBufferMemoryRequirements(device, buffer->getHandle(), &memRequirements);
+
+    VkMemoryHostPointerPropertiesEXT externalMemoryHostProperties = {};
+    externalMemoryHostProperties.sType = VK_STRUCTURE_TYPE_MEMORY_HOST_POINTER_PROPERTIES_EXT;
+    externalMemoryHostProperties.pNext = nullptr;
+
+    // Get properties for external memory host pointer
+    vkGetMemoryHostPointerPropertiesEXT(device,
+                                        VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT,
+                                        hostPtr, &externalMemoryHostProperties);
+
+    // Buffer memory type bits should be compatible with host pointer memory type bits
+    memRequirements.memoryTypeBits =
+        externalMemoryHostProperties.memoryTypeBits & memRequirements.memoryTypeBits;
+    if (memRequirements.memoryTypeBits == 0)
+    {
+        ERR() << "Buffer memoryTypeBits are not compatible with hostPtr memoryTypeBits:"
+              << externalMemoryHostProperties.memoryTypeBits;
+        return angle::Result::Stop;
+    }
+
+    return angle::Result::Continue;
+}
+
+angle::Result InitExternalHostMemory(ErrorContext *context,
+                                     void *hostPtr,
+                                     VkMemoryPropertyFlags memoryProperties,
+                                     Buffer *buffer,
+                                     VkMemoryPropertyFlags *memoryPropertyFlagsOut,
+                                     uint32_t *memoryTypeIndexOut,
+                                     DeviceMemory *deviceMemoryOut,
+                                     VkDeviceSize *sizeOut)
+{
+    VkMemoryRequirements externalMemoryRequirements = {};
+    ANGLE_TRY(
+        GetHostPointerMemoryRequirements(context, hostPtr, externalMemoryRequirements, buffer));
+
+    // Import memory from a host pointer by using VK_EXT_external_memory_host extension
+    VkImportMemoryHostPointerInfoEXT importInfo = {};
+    importInfo.sType        = VK_STRUCTURE_TYPE_IMPORT_MEMORY_HOST_POINTER_INFO_EXT;
+    importInfo.handleType   = VK_EXTERNAL_MEMORY_HANDLE_TYPE_HOST_ALLOCATION_BIT_EXT;
+    importInfo.pHostPointer = hostPtr;
+
+    ANGLE_VK_TRY(context, AllocateBufferMemoryWithRequirements(
+                              context, MemoryAllocationType::BufferExternal, memoryProperties,
+                              externalMemoryRequirements, &importInfo, buffer,
+                              memoryPropertyFlagsOut, memoryTypeIndexOut, deviceMemoryOut));
+
+    *sizeOut = externalMemoryRequirements.size;
+
+    return angle::Result::Continue;
+}
+
 gl::TextureType Get2DTextureType(uint32_t layerCount, GLint samples)
 {
     if (layerCount > 1)
@@ -924,6 +1021,9 @@ PFN_vkGetPhysicalDeviceMemoryProperties2KHR vkGetPhysicalDeviceMemoryProperties2
 // VK_KHR_external_semaphore_fd
 PFN_vkImportSemaphoreFdKHR vkImportSemaphoreFdKHR = nullptr;
 
+// VK_EXT_device_fault
+PFN_vkGetDeviceFaultInfoEXT vkGetDeviceFaultInfoEXT = nullptr;
+
 // VK_EXT_host_query_reset
 PFN_vkResetQueryPoolEXT vkResetQueryPoolEXT = nullptr;
 
@@ -942,6 +1042,9 @@ PFN_vkGetImageMemoryRequirements2KHR vkGetImageMemoryRequirements2KHR   = nullpt
 // VK_KHR_bind_memory2
 PFN_vkBindBufferMemory2KHR vkBindBufferMemory2KHR = nullptr;
 PFN_vkBindImageMemory2KHR vkBindImageMemory2KHR   = nullptr;
+
+// VK_KHR_maintenance5
+PFN_vkCmdBindIndexBuffer2KHR vkCmdBindIndexBuffer2KHR = nullptr;
 
 // VK_KHR_external_fence_capabilities
 PFN_vkGetPhysicalDeviceExternalFencePropertiesKHR vkGetPhysicalDeviceExternalFencePropertiesKHR =
@@ -971,10 +1074,6 @@ PFN_vkCreateImagePipeSurfaceFUCHSIA vkCreateImagePipeSurfaceFUCHSIA = nullptr;
 PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID =
     nullptr;
 PFN_vkGetMemoryAndroidHardwareBufferANDROID vkGetMemoryAndroidHardwareBufferANDROID = nullptr;
-#    endif
-
-#    if defined(ANGLE_PLATFORM_GGP)
-PFN_vkCreateStreamDescriptorSurfaceGGP vkCreateStreamDescriptorSurfaceGGP = nullptr;
 #    endif
 
 #    define GET_INSTANCE_FUNC(vkName)                                                          \
@@ -1044,6 +1143,13 @@ PFN_vkTransitionImageLayoutEXT vkTransitionImageLayoutEXT           = nullptr;
 PFN_vkCmdPipelineBarrier2KHR vkCmdPipelineBarrier2KHR = nullptr;
 PFN_vkCmdWriteTimestamp2KHR vkCmdWriteTimestamp2KHR   = nullptr;
 
+// VK_KHR_external_memory_fd
+PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR                     = nullptr;
+PFN_vkGetMemoryFdPropertiesKHR vkGetMemoryFdPropertiesKHR = nullptr;
+
+// VK_EXT_external_memory_host
+PFN_vkGetMemoryHostPointerPropertiesEXT vkGetMemoryHostPointerPropertiesEXT = nullptr;
+
 void InitDebugUtilsEXTFunctions(VkInstance instance)
 {
     GET_INSTANCE_FUNC(vkCreateDebugUtilsMessengerEXT);
@@ -1085,16 +1191,14 @@ void InitExternalMemoryHardwareBufferANDROIDFunctions(VkDevice device)
 }
 #    endif
 
-#    if defined(ANGLE_PLATFORM_GGP)
-void InitGGPStreamDescriptorSurfaceFunctions(VkInstance instance)
-{
-    GET_INSTANCE_FUNC(vkCreateStreamDescriptorSurfaceGGP);
-}
-#    endif  // defined(ANGLE_PLATFORM_GGP)
-
 void InitExternalSemaphoreFdFunctions(VkDevice device)
 {
     GET_DEVICE_FUNC(vkImportSemaphoreFdKHR);
+}
+
+void InitDeviceFaultFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkGetDeviceFaultInfoEXT);
 }
 
 void InitHostQueryResetFunctions(VkDevice device)
@@ -1173,6 +1277,12 @@ void InitFragmentShadingRateKHRDeviceFunction(VkDevice device)
     GET_DEVICE_FUNC(vkCmdSetFragmentShadingRateKHR);
 }
 
+// VK_KHR_maintenance5
+void InitMaintenance5Functions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkCmdBindIndexBuffer2KHR);
+}
+
 // VK_GOOGLE_display_timing
 void InitGetPastPresentationTimingGoogleFunction(VkDevice device)
 {
@@ -1189,10 +1299,27 @@ void InitHostImageCopyFunctions(VkDevice device)
     GET_DEVICE_FUNC(vkTransitionImageLayoutEXT);
 }
 
+// VK_EXT_image_compression_control
+void InitImageCompressionControlFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkGetImageSubresourceLayout2EXT);
+}
+
 void InitSynchronization2Functions(VkDevice device)
 {
     GET_DEVICE_FUNC(vkCmdPipelineBarrier2KHR);
     GET_DEVICE_FUNC(vkCmdWriteTimestamp2KHR);
+}
+
+void InitExternalMemoryFdFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkGetMemoryFdKHR);
+    GET_DEVICE_FUNC(vkGetMemoryFdPropertiesKHR);
+}
+
+void InitExternalMemoryHostFunctions(VkDevice device)
+{
+    GET_DEVICE_FUNC(vkGetMemoryHostPointerPropertiesEXT);
 }
 
 #    undef GET_INSTANCE_FUNC
@@ -1252,6 +1379,24 @@ GLenum CalculateGenerateMipmapFilter(ContextVk *contextVk, angle::FormatID forma
     const bool hintFastest = contextVk->getState().getGenerateMipmapHint() == GL_FASTEST;
 
     return formatSupportsLinearFiltering && !hintFastest ? GL_LINEAR : GL_NEAREST;
+}
+
+bool HasRequiredGlobalPriority(
+    const std::vector<VkQueueFamilyGlobalPriorityPropertiesEXT> &globalPriorityProperties,
+    VkQueueGlobalPriorityEXT requiredGlobalPriority)
+{
+    for (const auto &globalPriorityProperty : globalPriorityProperties)
+    {
+        for (uint32_t i = 0; i < globalPriorityProperty.priorityCount; i++)
+        {
+            if (globalPriorityProperty.priorities[i] == requiredGlobalPriority)
+            {
+                return true;
+            }
+        }
+    }
+
+    return false;
 }
 
 namespace gl_vk
@@ -1706,6 +1851,22 @@ VkImageTiling GetTilingMode(gl::TilingMode tilingMode)
         default:
             UNREACHABLE();
             return VK_IMAGE_TILING_OPTIMAL;
+    }
+}
+
+VkFormat GetAstcDecodeMode(const GLenum astcDecodePrecision)
+{
+    switch (astcDecodePrecision)
+    {
+        case GL_RGBA16F:
+            return VK_FORMAT_R16G16B16A16_SFLOAT;
+        case GL_RGBA8:
+            return VK_FORMAT_R8G8B8A8_UNORM;
+        case GL_RGB9_E5:
+            return VK_FORMAT_E5B9G9R9_UFLOAT_PACK32;
+        default:
+            UNREACHABLE();
+            return VK_FORMAT_R16G16B16A16_SFLOAT;
     }
 }
 

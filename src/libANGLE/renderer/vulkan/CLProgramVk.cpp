@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 // CLProgramVk.cpp: Implements the class methods for CLProgramVk.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/renderer/vulkan/CLProgramVk.h"
 #include "libANGLE/renderer/vulkan/CLContextVk.h"
@@ -293,6 +298,22 @@ spv_result_t ParseReflection(CLProgramVk::SpvReflectionData &reflectionData,
                         {.pcRange = pcRange, .ordinal = ordinal});
                     break;
                 }
+                case NonSemanticClspvReflectionLiteralSampler:
+                {
+                    uint32_t descriptorSet = reflectionData.spvIntLookup[spvInstr.words[5]];
+                    ASSERT(descriptorSet < static_cast<uint32_t>(DescriptorSetIndex::EnumCount));
+                    uint32_t binding         = reflectionData.spvIntLookup[spvInstr.words[6]];
+                    uint32_t mask            = reflectionData.spvIntLookup[spvInstr.words[7]];
+                    cl_bool normalizedCoords = clspv_cl::IsNormalizedCoords(mask);
+                    cl::AddressingMode addressingMode = clspv_cl::GetAddressingMode(mask);
+                    cl::FilterMode filterMode         = clspv_cl::GetFilterMode(mask);
+                    reflectionData.literalSamplers.push_back({.descriptorSet    = descriptorSet,
+                                                              .binding          = binding,
+                                                              .normalizedCoords = normalizedCoords,
+                                                              .addressingMode   = addressingMode,
+                                                              .filterMode       = filterMode});
+                    break;
+                }
                 default:
                     break;
             }
@@ -327,6 +348,11 @@ std::string ProcessBuildOptions(const std::vector<std::string> &optionTokens,
         if (optionToken == "-create-library" && buildType == CLProgramVk::BuildType::LINK)
         {
             processedOptions += " --output-format=bc";
+            continue;
+        }
+        else if (optionToken == "-cl-std=CL2.0")
+        {
+            processedOptions += " -cl-std=CL2.0 -inline-entry-points";
             continue;
         }
         processedOptions += " " + optionToken;
@@ -545,7 +571,7 @@ angle::Result CLProgramVk::compile(const cl::DevicePtrs &devices,
             ERR() << "Failed to create output path(s) for header(s)!";
             ANGLE_CL_RETURN_ERROR(CL_INVALID_OPERATION);
         }
-        writeFile(headerFilePath.c_str(), inputHeaderSrc.data(), inputHeaderSrc.size());
+        writeFile(headerFilePath.c_str(), inputHeaderSrc);
     }
 
     setBuildStatus(devicePtrs, CL_BUILD_IN_PROGRESS);

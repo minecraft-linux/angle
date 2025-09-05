@@ -131,7 +131,8 @@ struct DrawElementsIndirectCommand
 // more fully tested in InstancingTest.cpp.
 // Correct interaction with the instancing APIs is tested here by using scaling
 // and then instancing the array of quads over four quadrants on the screen.
-class MultiDrawTest : public ANGLETestBase, public ::testing::TestWithParam<MultiDrawTestParams>
+class MultiDrawTest : public ANGLETestBase,
+                      public ::testing::WithParamInterface<MultiDrawTestParams>
 {
   protected:
     MultiDrawTest()
@@ -187,6 +188,67 @@ void main()
       color = vec4(0, 1, 0, 1);
     } else {
       color = vec4(0, 0, 1, 1);
+    }
+
+    mat3 transform = mat3(1.0);
+)"
+               << (IsInstancedTest() ? R"(
+    transform[0][0] = 0.5;
+    transform[1][1] = 0.5;
+    if (vInstance == 0.0) {
+
+    } else if (vInstance == 1.0) {
+        transform[2][0] = 0.5;
+    } else if (vInstance == 2.0) {
+        transform[2][1] = 0.5;
+    } else if (vInstance == 3.0) {
+        transform[2][0] = 0.5;
+        transform[2][1] = 0.5;
+    }
+)"
+                                     : "")
+               << R"(
+    gl_Position = vec4(transform * vec3(vPosition, 1.0) * 2.0 - 1.0, 1);
+})";
+
+        return shader.str();
+    }
+
+    std::string VertexShaderSourceWithUniforms()
+    {
+        std::stringstream shader;
+        shader << (IsDrawIDTest() ? "#extension GL_ANGLE_multi_draw : require\n" : "")
+               << (IsInstancedTest() ? "attribute float vInstance;" : "") << R"(
+uniform bool boolUniform;
+uniform highp vec4 colorId0Uniform;
+uniform highp vec4 colorId1Uniform;
+uniform highp vec4 colorId2Uniform;
+attribute vec2 vPosition;
+varying vec4 color;
+void main()
+{
+    int id = )" << (IsDrawIDTest() ? "gl_DrawID" : "0")
+               << ";" << R"(
+    float quad_id = float(id / 2);
+    float color_id = quad_id - (3.0 * floor(quad_id / 3.0));
+    if (color_id == 0.0) {
+      if (boolUniform) {
+        color = colorId0Uniform;
+      } else {
+        color = vec4(0, 0, 0, 1);
+      }
+    } else if (color_id == 1.0) {
+      if (boolUniform) {
+        color = colorId1Uniform;
+      } else {
+        color = vec4(0, 0, 0, 1);
+      }
+    } else {
+      if (boolUniform) {
+        color = colorId2Uniform;
+      } else {
+        color = vec4(0, 0, 0, 1);
+      }
     }
 
     mat3 transform = mat3(1.0);
@@ -488,7 +550,7 @@ class MultiDrawNoInstancingSupportTest : public MultiDrawTest
 // 4 magenta triangles are drawn at the corners of the screen
 // in different orders from the same vertex and index arrays.
 class MultiDrawIndirectTest : public ANGLETestBase,
-                              public ::testing::TestWithParam<MultiDrawIndirectTestParams>
+                              public ::testing::WithParamInterface<MultiDrawIndirectTestParams>
 {
   protected:
     MultiDrawIndirectTest()
@@ -592,6 +654,47 @@ TEST_P(MultiDrawTest, CanCompile)
     SetupProgram();
 }
 
+// Tests basic drawcount validation
+TEST_P(MultiDrawTest, Validation)
+{
+    ANGLE_SKIP_TEST_IF(!requestMultiDrawExtension());
+
+    const GLint first   = 0;
+    const GLsizei count = 0;
+    const GLvoid *const indices[1]{nullptr};
+
+    glMultiDrawArraysANGLE(GL_TRIANGLES, &first, &count, -1);
+    EXPECT_GL_ERROR(GL_INVALID_VALUE);
+
+    glMultiDrawArraysANGLE(GL_TRIANGLES, &first, &count, 0);
+    EXPECT_GL_NO_ERROR();
+
+    glMultiDrawElementsANGLE(GL_TRIANGLES, &count, GL_UNSIGNED_SHORT, indices, -1);
+    EXPECT_GL_ERROR(GL_INVALID_VALUE);
+
+    glMultiDrawElementsANGLE(GL_TRIANGLES, &count, GL_UNSIGNED_SHORT, indices, 0);
+    EXPECT_GL_NO_ERROR();
+
+    if (IsInstancedTest())
+    {
+        const GLsizei instances = 0;
+
+        glMultiDrawArraysInstancedANGLE(GL_TRIANGLES, &first, &count, &instances, -1);
+        EXPECT_GL_ERROR(GL_INVALID_VALUE);
+
+        glMultiDrawArraysInstancedANGLE(GL_TRIANGLES, &first, &count, &instances, 0);
+        EXPECT_GL_NO_ERROR();
+
+        glMultiDrawElementsInstancedANGLE(GL_TRIANGLES, &count, GL_UNSIGNED_SHORT, indices,
+                                          &instances, -1);
+        EXPECT_GL_ERROR(GL_INVALID_VALUE);
+
+        glMultiDrawElementsInstancedANGLE(GL_TRIANGLES, &count, GL_UNSIGNED_SHORT, indices,
+                                          &instances, 0);
+        EXPECT_GL_NO_ERROR();
+    }
+}
+
 // Tests basic functionality of glMultiDrawArraysANGLE
 TEST_P(MultiDrawTest, MultiDrawArrays)
 {
@@ -638,6 +741,52 @@ TEST_P(MultiDrawTest, MultiDrawElements)
     ANGLE_SKIP_TEST_IF(!requestExtensions());
     SetupBuffers();
     SetupProgram();
+    DoDrawElements();
+    EXPECT_GL_NO_ERROR();
+    CheckDrawResult(DrawIDOptionOverride::Default);
+}
+
+// Bool uniform does not have a precision. If the "uniform sort by precision" places bool uniform
+// in front of uniforms added by ANGLE (e.g. ANGLE_angle_DrawID), it can cause uniforms not
+// interpreted correctly on Mac. e.g. http://crbug.com/437678149 For example, following uniform
+// order can cause _umodelViewMatrix not being read correctly
+// struct ANGLE_UserUniforms {
+//  bool _uapplyOffset;
+//  int ANGLE_angle_DrawID;
+//  metal::float4x4 _umodelViewMatrix;
+//  metal::float4x4 _uprojectionMatrix;
+//}
+
+// Changing above to the following fix the bug on Mac
+// struct ANGLE_UserUniforms {
+//  int ANGLE_angle_DrawID;
+//  metal::float4x4 _umodelViewMatrix;
+//  metal::float4x4 _uprojectionMatrix;
+//  int _uapplyOffset;
+//}
+// Add a test that check "adding a bool uniform will not mess up other uniforms on Mac".
+TEST_P(MultiDrawTest, MultiDrawElementsWithBoolUniforms)
+{
+    ANGLE_SKIP_TEST_IF(!requestExtensions());
+    SetupBuffers();
+    mProgram =
+        CompileProgram(VertexShaderSourceWithUniforms().c_str(), FragmentShaderSource().c_str());
+    EXPECT_GL_NO_ERROR();
+    ASSERT_GE(mProgram, 1u);
+    glUseProgram(mProgram);
+    mPositionLoc         = glGetAttribLocation(mProgram, "vPosition");
+    mInstanceLoc         = glGetAttribLocation(mProgram, "vInstance");
+    GLint boolUniformLoc = glGetUniformLocation(mProgram, "boolUniform");
+    glUniform1i(boolUniformLoc, true);
+    GLfloat colorId0UniformValue[4] = {1.0, 0.0, 0.0, 1.0};
+    GLint colorId0UniformLoc        = glGetUniformLocation(mProgram, "colorId0Uniform");
+    glUniform4fv(colorId0UniformLoc, 1, colorId0UniformValue);
+    GLfloat colorId1UniformValue[4] = {0.0, 1.0, 0.0, 1.0};
+    GLint colorId1UniformLoc        = glGetUniformLocation(mProgram, "colorId1Uniform");
+    glUniform4fv(colorId1UniformLoc, 1, colorId1UniformValue);
+    GLfloat colorId2UniformValue[4] = {0.0, 0.0, 1.0, 1.0};
+    GLint colorId2UniformLoc        = glGetUniformLocation(mProgram, "colorId2Uniform");
+    glUniform4fv(colorId2UniformLoc, 1, colorId2UniformValue);
     DoDrawElements();
     EXPECT_GL_NO_ERROR();
     CheckDrawResult(DrawIDOptionOverride::Default);
@@ -1238,6 +1387,48 @@ TEST_P(MultiDrawNoInstancingSupportTest, InvalidOperation)
     glMultiDrawElementsInstancedANGLE(GL_TRIANGLES, &count, GL_UNSIGNED_SHORT, &indices, &instances,
                                       1);
     EXPECT_GL_ERROR(GL_INVALID_OPERATION);
+}
+
+// Test that a no-op multi-draw call does not leave deferred clears around in the backends that do
+// that.
+TEST_P(MultiDrawTest, ClearThenNoopMultiDraw)
+{
+    ANGLE_SKIP_TEST_IF(!EnsureGLExtensionEnabled("GL_ANGLE_multi_draw"));
+
+    SetupProgram();
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+    GLRenderbuffer rbo;
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 16, 16);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo);
+    EXPECT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+    ASSERT_GL_NO_ERROR();
+
+    // Clear the framebuffer first; this clear may be deferred.
+    glClearColor(0, 0, 0, 1);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Issue a multi-draw call that is no-op
+    constexpr GLsizei kDrawCount    = 3;
+    GLsizei counts[kDrawCount]      = {};
+    const void *indices[kDrawCount] = {};
+    glMultiDrawElementsANGLE(GL_TRIANGLES, counts, GL_UNSIGNED_BYTE, indices, kDrawCount);
+
+    // Modify the framebuffer so it's sync'ed again on the next call.
+    GLRenderbuffer rbo2;
+    glBindRenderbuffer(GL_RENDERBUFFER, rbo2);
+    glRenderbufferStorage(GL_RENDERBUFFER, GL_RGBA8, 8, 8);
+    glFramebufferRenderbuffer(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_RENDERBUFFER, rbo2);
+    EXPECT_GL_FRAMEBUFFER_COMPLETE(GL_FRAMEBUFFER);
+    ASSERT_GL_NO_ERROR();
+
+    // Issue any command that uses the framebuffer.
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::black);
 }
 
 #define ANGLE_ALL_MULTIDRAW_TEST_PLATFORMS_ES2                                             \

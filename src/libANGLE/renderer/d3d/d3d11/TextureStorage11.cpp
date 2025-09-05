@@ -8,6 +8,10 @@
 // classes TextureStorage11_2D and TextureStorage11_Cube, which act as the interface to the D3D11
 // texture.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d11/TextureStorage11.h"
 
 #include <tuple>
@@ -4385,7 +4389,10 @@ angle::Result TextureStorage11_Buffer::initTexture(const gl::Context *context)
     {
         ID3D11Buffer *buffer = nullptr;
         Buffer11 *buffer11   = GetImplAs<Buffer11>(mBuffer.get());
-        ANGLE_TRY(buffer11->getBuffer(context, rx::BufferUsage::BUFFER_USAGE_TYPED_UAV, &buffer));
+        BufferFeedback feedback;
+        ANGLE_TRY(buffer11->getBuffer(context, rx::BufferUsage::BUFFER_USAGE_TYPED_UAV, &buffer,
+                                      &feedback));
+        mBuffer.get()->applyImplFeedback(context, feedback);
         mTexture.set(buffer, mFormatInfo);
         mTexture.get()->AddRef();
     }

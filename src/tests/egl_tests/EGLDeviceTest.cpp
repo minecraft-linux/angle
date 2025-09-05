@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #ifndef ANGLE_ENABLE_D3D9
 #    define ANGLE_ENABLE_D3D9
 #endif
@@ -232,7 +236,7 @@ TEST_P(EGLDeviceCreationTest, RenderingUsingD3D11Device)
     ASSERT_EGL_SUCCESS();
 
     // Create an EGLDisplay using the EGLDevice
-    mDisplay = eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, eglDevice, nullptr);
+    mDisplay = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, eglDevice, nullptr);
     ASSERT_NE(EGL_NO_DISPLAY, mDisplay);
 
     // Create a surface using the display
@@ -251,7 +255,7 @@ TEST_P(EGLDeviceCreationTest, RenderingUsingD3D11Device)
     eglReleaseDeviceANGLE(eglDevice);
 }
 
-// Test that calling eglGetPlatformDisplayEXT with the same device returns the same display
+// Test that calling eglGetPlatformDisplay with the same device returns the same display
 TEST_P(EGLDeviceCreationTest, GetPlatformDisplayTwice)
 {
     CreateD3D11Device();
@@ -261,10 +265,10 @@ TEST_P(EGLDeviceCreationTest, GetPlatformDisplayTwice)
     ASSERT_EGL_SUCCESS();
 
     // Create an EGLDisplay using the EGLDevice
-    EGLDisplay display1 = eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, eglDevice, nullptr);
+    EGLDisplay display1 = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, eglDevice, nullptr);
     ASSERT_NE(EGL_NO_DISPLAY, display1);
 
-    EGLDisplay display2 = eglGetPlatformDisplayEXT(EGL_PLATFORM_DEVICE_EXT, eglDevice, nullptr);
+    EGLDisplay display2 = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT, eglDevice, nullptr);
     ASSERT_NE(EGL_NO_DISPLAY, display2);
 
     ASSERT_EQ(display1, display2);
@@ -439,8 +443,8 @@ TEST_P(EGLDeviceQueryTest, GetPlatformDisplayDeviceReuse)
     EXPECT_EGL_TRUE(
         eglQueryDisplayAttribEXT(getEGLWindow()->getDisplay(), EGL_DEVICE_EXT, &eglDevice));
 
-    EGLDisplay display2 = eglGetPlatformDisplayEXT(
-        EGL_PLATFORM_DEVICE_EXT, reinterpret_cast<EGLDeviceEXT>(eglDevice), nullptr);
+    EGLDisplay display2 = eglGetPlatformDisplay(EGL_PLATFORM_DEVICE_EXT,
+                                                reinterpret_cast<EGLDeviceEXT>(eglDevice), nullptr);
     EXPECT_EQ(getEGLWindow()->getDisplay(), display2);
 }
 

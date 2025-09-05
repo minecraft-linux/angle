@@ -8,9 +8,11 @@
 //
 
 #include "libANGLE/renderer/vulkan/CommandQueue.h"
+#include <algorithm>
 #include "common/system_utils.h"
 #include "libANGLE/renderer/vulkan/SyncVk.h"
 #include "libANGLE/renderer/vulkan/vk_renderer.h"
+#include "vulkan/vulkan_core.h"
 
 namespace rx
 {
@@ -109,6 +111,7 @@ void RecyclableFence::destroy(VkDevice device)
     {
         if (mRecycler != nullptr)
         {
+            mFence.reset(device);
             mRecycler->recycle(std::move(mFence));
         }
         else
@@ -134,7 +137,6 @@ void FenceRecycler::fetch(VkDevice device, Fence *fenceOut)
     if (!mRecycler.empty())
     {
         mRecycler.fetch(fenceOut);
-        fenceOut->reset(device);
     }
 }
 
@@ -185,13 +187,13 @@ void CommandBatch::destroy(VkDevice device)
     // Do not clean other members to catch invalid reuse attempt with ASSERTs.
 }
 
-angle::Result CommandBatch::release(ErrorContext *context)
+angle::Result CommandBatch::release(ErrorContext *context, WhenToResetCommandBuffer whenToReset)
 {
     if (mPrimaryCommands.valid())
     {
         ASSERT(mCommandPoolAccess != nullptr);
         ANGLE_TRY(mCommandPoolAccess->collectPrimaryCommandBuffer(context, mProtectionType,
-                                                                  &mPrimaryCommands));
+                                                                  &mPrimaryCommands, whenToReset));
     }
     mSecondaryCommands.releaseCommandBuffers();
     mFence.reset();
@@ -247,7 +249,7 @@ VkResult CommandBatch::initFence(VkDevice device, FenceRecycler *recycler)
 
 void CommandBatch::setExternalFence(SharedExternalFence &&externalFence)
 {
-    ASSERT(!hasFence());
+    ASSERT(!mExternalFence);
     mExternalFence = std::move(externalFence);
 }
 
@@ -269,7 +271,6 @@ const SharedExternalFence &CommandBatch::getExternalFence()
 
 bool CommandBatch::hasFence() const
 {
-    ASSERT(!mExternalFence || !mFence);
     ASSERT(!mFence || mFence->valid());
     return mFence || mExternalFence;
 }
@@ -394,6 +395,9 @@ void CleanUpThread::processTasks()
 
 angle::Result CleanUpThread::processTasksImpl(bool *exitThread)
 {
+    WhenToResetCommandBuffer whenToReset = mRenderer->getFeatures().asyncCommandBufferReset.enabled
+                                               ? WhenToResetCommandBuffer::Now
+                                               : WhenToResetCommandBuffer::Defer;
     while (true)
     {
         std::unique_lock<std::mutex> lock(mMutex);
@@ -412,10 +416,10 @@ angle::Result CleanUpThread::processTasksImpl(bool *exitThread)
             ANGLE_TRY(mCommandQueue->checkCompletedCommands(this));
 
             // Reset command buffer and clean up garbage
-            if (mRenderer->isAsyncCommandBufferResetAndGarbageCleanupEnabled() &&
+            if (mRenderer->getFeatures().asyncGarbageCleanup.enabled &&
                 mCommandQueue->hasFinishedCommands())
             {
-                ANGLE_TRY(mCommandQueue->releaseFinishedCommands(this));
+                ANGLE_TRY(mCommandQueue->releaseFinishedCommands(this, whenToReset));
             }
             mRenderer->cleanupGarbage(nullptr);
         }
@@ -442,9 +446,9 @@ void CleanUpThread::destroy(ErrorContext *context)
     }
 
     // Perform any lingering clean up right away.
-    if (mRenderer->isAsyncCommandBufferResetAndGarbageCleanupEnabled())
+    if (mRenderer->getFeatures().asyncGarbageCleanup.enabled)
     {
-        (void)mCommandQueue->releaseFinishedCommands(context);
+        (void)mCommandQueue->releaseFinishedCommands(context, WhenToResetCommandBuffer::Now);
         mRenderer->cleanupGarbage(nullptr);
     }
 
@@ -499,13 +503,14 @@ void CommandPoolAccess::destroyPrimaryCommandBuffer(VkDevice device,
 
 angle::Result CommandPoolAccess::collectPrimaryCommandBuffer(ErrorContext *context,
                                                              const ProtectionType protectionType,
-                                                             PrimaryCommandBuffer *primaryCommands)
+                                                             PrimaryCommandBuffer *primaryCommands,
+                                                             WhenToResetCommandBuffer whenToReset)
 {
     ASSERT(primaryCommands->valid());
     std::lock_guard<angle::SimpleMutex> lock(mCmdPoolMutex);
 
     PersistentCommandPool &commandPool = mPrimaryCommandPoolMap[protectionType];
-    ANGLE_TRY(commandPool.collect(context, std::move(*primaryCommands)));
+    ANGLE_TRY(commandPool.collect(context, std::move(*primaryCommands), whenToReset));
 
     return angle::Result::Continue;
 }
@@ -895,11 +900,15 @@ angle::Result CommandQueue::submitCommands(
             submitInfo.pNext                    = &protectedSubmitInfo;
         }
 
-        if (!externalFence)
+        // Initializing a fence is not required if the batch already has an external fence and does
+        // not need an extra fence after its submission.
+        const bool needsOwnedFence =
+            renderer->getFeatures().enableExtraSubmitFence.enabled || !externalFence;
+        if (needsOwnedFence)
         {
-            ANGLE_VK_TRY(context, batch.initFence(context->getDevice(), &mFenceRecycler));
+            ANGLE_VK_TRY(context, batch.initFence(device, &mFenceRecycler));
         }
-        else
+        if (externalFence)
         {
             batch.setExternalFence(std::move(externalFence));
         }
@@ -989,7 +998,7 @@ angle::Result CommandQueue::queueSubmitLocked(ErrorContext *context,
     if (mNumAllCommands == mFinishedCommandBatches.capacity())
     {
         std::lock_guard<angle::SimpleMutex> lock(mCmdReleaseMutex);
-        ANGLE_TRY(releaseFinishedCommandsLocked(context));
+        ANGLE_TRY(releaseFinishedCommandsLocked(context, WhenToResetCommandBuffer::Now));
     }
     // Assert will succeed since mNumAllCommands is incremented only in this method below.
     ASSERT(mNumAllCommands < mFinishedCommandBatches.capacity());
@@ -999,12 +1008,21 @@ angle::Result CommandQueue::queueSubmitLocked(ErrorContext *context,
         CommandBatch &batch = commandBatch.get();
 
         VkQueue queue = getQueue(contextPriority);
-        VkFence fence = batch.getFenceHandle();
-        ASSERT(fence != VK_NULL_HANDLE);
-        ANGLE_VK_TRY(context, vkQueueSubmit(queue, 1, &submitInfo, fence));
-
         if (batch.getExternalFence())
         {
+            VkFence externalFenceHandle = batch.getExternalFence()->getHandle();
+            ASSERT(externalFenceHandle != VK_NULL_HANDLE);
+            ANGLE_VK_TRY(context, vkQueueSubmit(queue, 1, &submitInfo, externalFenceHandle));
+
+            // If enabled, there will be an extra fence submitted after the primary commands.
+            if (renderer->getFeatures().enableExtraSubmitFence.enabled)
+            {
+                VkFence extraSubmitFence     = batch.getFenceHandle();
+                VkSubmitInfo fenceSubmitInfo = {};
+                fenceSubmitInfo.sType        = VK_STRUCTURE_TYPE_SUBMIT_INFO;
+                ANGLE_VK_TRY(context, vkQueueSubmit(queue, 1, &fenceSubmitInfo, extraSubmitFence));
+            }
+
             // exportFd is exporting VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT_KHR type handle which
             // obeys copy semantics. This means that the fence must already be signaled or the work
             // to signal it is in the graphics pipeline at the time we export the fd.
@@ -1012,9 +1030,15 @@ angle::Result CommandQueue::queueSubmitLocked(ErrorContext *context,
             ExternalFence &externalFence       = *batch.getExternalFence();
             VkFenceGetFdInfoKHR fenceGetFdInfo = {};
             fenceGetFdInfo.sType               = VK_STRUCTURE_TYPE_FENCE_GET_FD_INFO_KHR;
-            fenceGetFdInfo.fence               = externalFence.getHandle();
+            fenceGetFdInfo.fence               = externalFenceHandle;
             fenceGetFdInfo.handleType          = VK_EXTERNAL_FENCE_HANDLE_TYPE_SYNC_FD_BIT_KHR;
             externalFence.exportFd(renderer->getDevice(), fenceGetFdInfo);
+        }
+        else
+        {
+            VkFence fence = batch.getFenceHandle();
+            ASSERT(fence != VK_NULL_HANDLE);
+            ANGLE_VK_TRY(context, vkQueueSubmit(queue, 1, &submitInfo, fence));
         }
     }
 
@@ -1050,14 +1074,14 @@ void CommandQueue::resetPerFramePerfCounters()
 angle::Result CommandQueue::releaseFinishedCommandsAndCleanupGarbage(ErrorContext *context)
 {
     Renderer *renderer = context->getRenderer();
-    if (renderer->isAsyncCommandBufferResetAndGarbageCleanupEnabled())
+    if (renderer->getFeatures().asyncGarbageCleanup.enabled)
     {
         renderer->requestAsyncCommandsAndGarbageCleanup(context);
     }
     else
     {
         // Do immediate command buffer reset and garbage cleanup
-        ANGLE_TRY(releaseFinishedCommands(context));
+        ANGLE_TRY(releaseFinishedCommands(context, WhenToResetCommandBuffer::Now));
         renderer->cleanupGarbage(nullptr);
     }
 
@@ -1152,7 +1176,8 @@ void CommandQueue::onCommandBatchFinishedLocked(CommandBatch &&batch)
     moveInFlightBatchToFinishedQueueLocked(std::move(batch));
 }
 
-angle::Result CommandQueue::releaseFinishedCommandsLocked(ErrorContext *context)
+angle::Result CommandQueue::releaseFinishedCommandsLocked(ErrorContext *context,
+                                                          WhenToResetCommandBuffer whenToReset)
 {
     ANGLE_TRACE_EVENT0("gpu.angle", "releaseFinishedCommandsLocked");
 
@@ -1160,7 +1185,7 @@ angle::Result CommandQueue::releaseFinishedCommandsLocked(ErrorContext *context)
     {
         CommandBatch &batch = mFinishedCommandBatches.front();
         ASSERT(batch.getQueueSerial() <= mLastCompletedSerials);
-        ANGLE_TRY(batch.release(context));
+        ANGLE_TRY(batch.release(context, whenToReset));
         popFinishedBatchLocked();
     }
 
@@ -1216,12 +1241,14 @@ void CommandQueue::popInFlightBatchLocked()
 }
 
 // QueuePriorities:
-constexpr float kVulkanQueuePriorityLow    = 0.0;
-constexpr float kVulkanQueuePriorityMedium = 0.4;
-constexpr float kVulkanQueuePriorityHigh   = 1.0;
+constexpr float kVulkanQueuePriorityLow      = 0.0;
+constexpr float kVulkanQueuePriorityMedium   = 0.4;
+constexpr float kVulkanQueuePriorityHigh     = 0.8;
+constexpr float kVulkanQueuePriorityRealtime = 1.0;
 
 const float QueueFamily::kQueuePriorities[static_cast<uint32_t>(egl::ContextPriority::EnumCount)] =
-    {kVulkanQueuePriorityMedium, kVulkanQueuePriorityHigh, kVulkanQueuePriorityLow};
+    {kVulkanQueuePriorityMedium, kVulkanQueuePriorityHigh, kVulkanQueuePriorityRealtime,
+     kVulkanQueuePriorityLow};
 
 DeviceQueueMap::~DeviceQueueMap() {}
 
@@ -1249,9 +1276,10 @@ void DeviceQueueMap::initialize(VkDevice device,
                                 uint32_t queueCount)
 {
     // QueueIndexing:
-    constexpr uint32_t kQueueIndexMedium = 0;
-    constexpr uint32_t kQueueIndexHigh   = 1;
-    constexpr uint32_t kQueueIndexLow    = 2;
+    constexpr uint32_t kQueueIndexMedium   = 0;
+    constexpr uint32_t kQueueIndexHigh     = 1;
+    constexpr uint32_t kQueueIndexRealtime = 2;
+    constexpr uint32_t kQueueIndexLow      = 3;
 
     ASSERT(queueCount);
     ASSERT((queueIndex + queueCount) <= queueFamily.getProperties()->queueCount);
@@ -1277,8 +1305,29 @@ void DeviceQueueMap::initialize(VkDevice device,
         mQueueAndIndices[egl::ContextPriority::High] =
             mQueueAndIndices[egl::ContextPriority::Medium];
     }
-    // If at least 3 queues, Low has its own queue. Adjust Low priority.
+
+    // If at least 3 queues, Realtime has its own queue
     if (queueCount > 2)
+    {
+        GetDeviceQueue(device, makeProtected, mQueueFamilyIndex, queueIndex + kQueueIndexRealtime,
+                       &queue);
+        mQueueAndIndices[egl::ContextPriority::Realtime] = {egl::ContextPriority::Realtime, queue,
+                                                            queueIndex + kQueueIndexRealtime};
+    }
+    else if (queueCount > 1)
+    {
+        // If only 2 queues, Realtime uses queue of High priority
+        mQueueAndIndices[egl::ContextPriority::Realtime] =
+            mQueueAndIndices[egl::ContextPriority::High];
+    }
+    else
+    {
+        mQueueAndIndices[egl::ContextPriority::Realtime] =
+            mQueueAndIndices[egl::ContextPriority::Medium];
+    }
+
+    // If at least 4 queues, Low has its own queue. Adjust Low priority.
+    if (queueCount > 3)
     {
         GetDeviceQueue(device, makeProtected, mQueueFamilyIndex, queueIndex + kQueueIndexLow,
                        &queue);
@@ -1300,32 +1349,36 @@ void QueueFamily::initialize(const VkQueueFamilyProperties &queueFamilyPropertie
 }
 
 uint32_t QueueFamily::FindIndex(const std::vector<VkQueueFamilyProperties> &queueFamilyProperties,
-                                VkQueueFlags flags,
-                                int32_t matchNumber,
+                                VkQueueFlags includeFlags,
+                                VkQueueFlags optionalFlags,
+                                VkQueueFlags excludeFlags,
                                 uint32_t *matchCount)
 {
-    uint32_t index = QueueFamily::kInvalidIndex;
-    uint32_t count = 0;
+    // check with both include and optional flags
+    VkQueueFlags preferredFlags = includeFlags | optionalFlags;
+    auto findIndexPredicate     = [&preferredFlags,
+                               &excludeFlags](const VkQueueFamilyProperties &queueInfo) {
+        return (queueInfo.queueFlags & excludeFlags) == 0 &&
+               (queueInfo.queueFlags & preferredFlags) == preferredFlags;
+    };
 
-    for (uint32_t familyIndex = 0; familyIndex < queueFamilyProperties.size(); ++familyIndex)
+    auto it = std::find_if(queueFamilyProperties.begin(), queueFamilyProperties.end(),
+                           findIndexPredicate);
+    if (it == queueFamilyProperties.end())
     {
-        const auto &queueInfo = queueFamilyProperties[familyIndex];
-        if ((queueInfo.queueFlags & flags) == flags)
-        {
-            ASSERT(queueInfo.queueCount > 0);
-            count++;
-            if ((index == QueueFamily::kInvalidIndex) && (matchNumber-- == 0))
-            {
-                index = familyIndex;
-            }
-        }
+        // didn't find a match, exclude the optional flags from the list
+        preferredFlags = includeFlags;
+        it             = std::find_if(queueFamilyProperties.begin(), queueFamilyProperties.end(),
+                                      findIndexPredicate);
     }
-    if (matchCount)
+    if (it == queueFamilyProperties.end())
     {
-        *matchCount = count;
+        *matchCount = 0;
+        return QueueFamily::kInvalidIndex;
     }
 
-    return index;
+    *matchCount = 1;
+    return static_cast<uint32_t>(std::distance(queueFamilyProperties.begin(), it));
 }
 
 }  // namespace vk

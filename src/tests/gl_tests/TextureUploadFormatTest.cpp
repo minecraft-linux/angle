@@ -3,9 +3,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// Texture upload format tests:
+// TextureUploadFormatTest.cpp:
 //   Test all texture unpack/upload formats for sampling correctness.
 //
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "common/mathutil.h"
 #include "image_util/copyimage.h"
@@ -18,7 +22,10 @@ namespace
 {
 
 class TextureUploadFormatTest : public ANGLETest<>
-{};
+{
+  protected:
+    void TestAll(const bool usePBO);
+};
 
 struct TexFormat final
 {
@@ -144,7 +151,7 @@ void EncodeThenZeroAndCopy(DestT &dest, const float srcVals[4])
 // Upload (1,2,5,3) to integer formats, and (1,2,5,3)/8.0 to float formats.
 // Draw a point into a 1x1 renderbuffer and readback the result for comparison with expectations.
 // Test all internalFormat/unpackFormat/unpackType combinations from ES3.0.
-TEST_P(TextureUploadFormatTest, All)
+void TextureUploadFormatTest::TestAll(const bool usePBO)
 {
     ANGLE_SKIP_TEST_IF(IsD3D9());
 
@@ -290,8 +297,24 @@ TEST_P(TextureUploadFormatTest, All)
     std::array<uint8_t, sizeof(float) * 4> srcBuffer;
 
     std::array<uint8_t, srcBuffer.size() * 2> subrectBuffer;
+
+    GLBuffer pboBuffer;
+    if (usePBO)
+    {
+        glBindBuffer(GL_PIXEL_UNPACK_BUFFER, pboBuffer);
+        glBufferData(GL_PIXEL_UNPACK_BUFFER, subrectBuffer.size(), nullptr, GL_DYNAMIC_DRAW);
+    }
+
     const auto fnTest = [&](const TexFormat &format, const GLColor &err) {
-        fnTestData(format, srcBuffer.data(), err, "simple");
+        if (usePBO)
+        {
+            glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, srcBuffer.size(), srcBuffer.data());
+            fnTestData(format, nullptr, err, "simple");
+        }
+        else
+        {
+            fnTestData(format, srcBuffer.data(), err, "simple");
+        }
 
         if (!hasSubrectUploads)
             return;
@@ -302,7 +325,15 @@ TEST_P(TextureUploadFormatTest, All)
 
         subrectBuffer.fill(0);
         memcpy(subrectBuffer.data() + bytesPerPixel, srcBuffer.data(), bytesPerPixel);
-        fnTestData(format, subrectBuffer.data(), err, "subrect");
+        if (usePBO)
+        {
+            glBufferSubData(GL_PIXEL_UNPACK_BUFFER, 0, subrectBuffer.size(), subrectBuffer.data());
+            fnTestData(format, nullptr, err, "simple");
+        }
+        else
+        {
+            fnTestData(format, subrectBuffer.data(), err, "subrect");
+        }
 
         glPixelStorei(GL_UNPACK_SKIP_PIXELS, 0);
     };
@@ -629,6 +660,19 @@ TEST_P(TextureUploadFormatTest, All)
     }
 
     EXPECT_GL_NO_ERROR();
+}
+
+// Test uploadings without PBO
+TEST_P(TextureUploadFormatTest, All)
+{
+    TestAll(/*usePBO=*/false);
+}
+
+// Test uploadings with PBO
+TEST_P(TextureUploadFormatTest, AllWithPBO)
+{
+    ANGLE_SKIP_TEST_IF(getClientMajorVersion() < 3);
+    TestAll(/*usePBO=*/true);
 }
 
 ANGLE_INSTANTIATE_TEST_ES2_AND_ES3(TextureUploadFormatTest);

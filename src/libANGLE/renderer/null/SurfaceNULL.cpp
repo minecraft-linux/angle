@@ -25,7 +25,7 @@ egl::Error SurfaceNULL::initialize(const egl::Display *display)
     return egl::NoError();
 }
 
-egl::Error SurfaceNULL::swap(const gl::Context *context)
+egl::Error SurfaceNULL::swap(const gl::Context *context, SurfaceSwapFeedback *feedback)
 {
     return egl::NoError();
 }
@@ -71,16 +71,10 @@ egl::Error SurfaceNULL::getMscRate(EGLint *numerator, EGLint *denominator)
 
 void SurfaceNULL::setSwapInterval(const egl::Display *display, EGLint interval) {}
 
-EGLint SurfaceNULL::getWidth() const
+gl::Extents SurfaceNULL::getSize() const
 {
     // TODO(geofflang): Read from an actual window?
-    return 100;
-}
-
-EGLint SurfaceNULL::getHeight() const
-{
-    // TODO(geofflang): Read from an actual window?
-    return 100;
+    return gl::Extents(100, 100, 1);
 }
 
 EGLint SurfaceNULL::isPostSubBufferSupported() const

@@ -16,6 +16,10 @@
 #ifndef COMPILER_TRANSLATOR_INTERMNODE_H_
 #define COMPILER_TRANSLATOR_INTERMNODE_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "GLSLANG/ShaderLang.h"
 
 #include <algorithm>
@@ -449,7 +453,7 @@ class TIntermSwizzle : public TIntermExpression
 {
   public:
     // This constructor determines the type of the node based on the operand.
-    TIntermSwizzle(TIntermTyped *operand, const TVector<int> &swizzleOffsets);
+    TIntermSwizzle(TIntermTyped *operand, const TVector<uint32_t> &swizzleOffsets);
 
     TIntermTyped *deepCopy() const override { return new TIntermSwizzle(*this); }
 
@@ -466,17 +470,17 @@ class TIntermSwizzle : public TIntermExpression
     ImmutableString getOffsetsAsXYZW() const;
     void writeOffsetsAsXYZW(TInfoSinkBase *out) const;
 
-    const TVector<int> &getSwizzleOffsets() { return mSwizzleOffsets; }
+    const TVector<uint32_t> &getSwizzleOffsets() { return mSwizzleOffsets; }
 
     bool hasDuplicateOffsets() const;
     void setHasFoldedDuplicateOffsets(bool hasFoldedDuplicateOffsets);
-    bool offsetsMatch(int offset) const;
+    bool offsetsMatch(uint32_t offset) const;
 
     TIntermTyped *fold(TDiagnostics *diagnostics) override;
 
   protected:
     TIntermTyped *mOperand;
-    TVector<int> mSwizzleOffsets;
+    TVector<uint32_t> mSwizzleOffsets;
     bool mHasFoldedDuplicateOffsets;
 
   private:
@@ -700,7 +704,7 @@ class TIntermBlock : public TIntermNode, public TIntermAggregateBase
     size_t getChildCount() const final;
     TIntermNode *getChildNode(size_t index) const final;
     bool replaceChildNode(TIntermNode *original, TIntermNode *replacement) override;
-    void replaceAllChildren(const TIntermSequence &newStatements);
+    void replaceAllChildren(TIntermSequence &&newStatements);
 
     // Only intended for initially building the block.
     void appendStatement(TIntermNode *statement);
