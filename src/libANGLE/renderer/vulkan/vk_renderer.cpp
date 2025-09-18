@@ -283,6 +283,8 @@ constexpr const char *kSkippedMessages[] = {
     "VUID-vkCmdDraw-None-09462",
     // https://anglebug.com/394598758
     "VUID-vkBindBufferMemory-size-01037",
+    // https://anglebug.com/443133082
+    "VUID-vkCmdDraw-None-09549",
 };
 
 // Validation messages that should be ignored only when VK_EXT_primitive_topology_list_restart is
@@ -302,6 +304,12 @@ constexpr const char *kNoMaintenance5SkippedMessages[] = {
 constexpr const char *kNoMaintenance9SkippedMessages[] = {
     // http://issuetracker.google.com/429339330
     "WARNING-VkImageSubresourceRange-layerCount-compatibility",
+};
+
+// Validation messages that should be ignored only when preferBGR565ToRGB565 is enabled.
+constexpr const char *kPreferBGR565SkippedMessages[] = {
+    // http://anglebug.com/42264464
+    "VUID-VkSamplerCustomBorderColorCreateInfoEXT-format-04015",
 };
 
 // Validation messages that should be ignored only when exposeNonConformantExtensionsAndVersions is
@@ -483,6 +491,14 @@ constexpr vk::SkippedSyncvalMessage kSkippedSyncvalMessages[] = {
       "VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)",
       "prior_access = SYNC_IMAGE_LAYOUT_TRANSITION", "command = vkCmdDrawIndexed",
       "prior_command = vkCmdEndRenderPass"}},
+    // False positive: https://github.com/KhronosGroup/Vulkan-ValidationLayers/issues/10667
+    {"SYNC-HAZARD-WRITE-AFTER-READ",
+     false,
+     {"message_type = DynamicRenderingAttachmentError", "hazard_type = WRITE_AFTER_READ",
+      "access = "
+      "VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)",
+      "prior_access = VK_PIPELINE_STAGE_2_BLIT_BIT(VK_ACCESS_2_TRANSFER_READ_BIT)",
+      "command = vkCmdDraw", "prior_command = vkCmdBlitImage"}},
     // https://anglebug.com/443095908
     {"SYNC-HAZARD-WRITE-AFTER-READ",
      false,
@@ -2764,6 +2780,7 @@ angle::Result Renderer::initializeMemoryAllocator(vk::ErrorContext *context)
 // - VK_EXT_device_fault                               deviceFault (feature),
 //                                                     deviceFaultVendorBinary (feature)
 // - VK_EXT_astc_decode_mode                           decodeModeSharedExponent (feature)
+// - VK_KHR_unified_image_layouts                      unifiedImageLayouts (feature)
 // - VK_EXT_global_priority_query                      globalPriorityQuery (feature)
 // - VK_EXT_external_memory_host                       minImportedHostPointerAlignment (property)
 //
@@ -2937,6 +2954,11 @@ void Renderer::appendDeviceExtensionFeaturesNotPromoted(
         vk::AddToPNextChain(deviceFeatures, &mDynamicRenderingLocalReadFeatures);
     }
 
+    if (ExtensionFound(VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME, deviceExtensionNames))
+    {
+        vk::AddToPNextChain(deviceFeatures, &mUnifiedImageLayoutsFeatures);
+    }
+
     if (ExtensionFound(VK_EXT_BLEND_OPERATION_ADVANCED_EXTENSION_NAME, deviceExtensionNames))
     {
         vk::AddToPNextChain(deviceFeatures, &mBlendOperationAdvancedFeatures);
@@ -3034,6 +3056,7 @@ void Renderer::appendDeviceExtensionFeaturesPromotedTo11(
 //                                          shaderSignedZeroInfNanPreserveFloat32 (property)
 //                                          shaderSignedZeroInfNanPreserveFloat64 (property)
 // - VK_KHR_uniform_buffer_standard_layout: uniformBufferStandardLayout (feature)
+// - VK_KHR_buffer_device_address:          bufferDeviceAddress (feature)
 //
 // Note that supportedDepthResolveModes is used just to check if the property struct is populated.
 // ANGLE always uses VK_RESOLVE_MODE_SAMPLE_ZERO_BIT for both depth and stencil, and support for
@@ -3092,6 +3115,11 @@ void Renderer::appendDeviceExtensionFeaturesPromotedTo12(
     if (ExtensionFound(VK_KHR_UNIFORM_BUFFER_STANDARD_LAYOUT_EXTENSION_NAME, deviceExtensionNames))
     {
         vk::AddToPNextChain(deviceFeatures, &mUniformBufferStandardLayoutFeatures);
+    }
+
+    if (ExtensionFound(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME, deviceExtensionNames))
+    {
+        vk::AddToPNextChain(deviceFeatures, &mBufferDeviceAddressFeatures);
     }
 }
 
@@ -3375,6 +3403,10 @@ void Renderer::queryDeviceExtensionFeatures(const vk::ExtensionNameList &deviceE
     mPhysicalDeviceAstcDecodeFeatures.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_ASTC_DECODE_FEATURES_EXT;
 
+    mUnifiedImageLayoutsFeatures = {};
+    mUnifiedImageLayoutsFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_UNIFIED_IMAGE_LAYOUTS_FEATURES_KHR;
+
     mShaderIntegerDotProductFeatures = {};
     mShaderIntegerDotProductFeatures.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_SHADER_INTEGER_DOT_PRODUCT_FEATURES;
@@ -3390,6 +3422,10 @@ void Renderer::queryDeviceExtensionFeatures(const vk::ExtensionNameList &deviceE
     mExternalMemoryHostProperties = {};
     mExternalMemoryHostProperties.sType =
         VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_EXTERNAL_MEMORY_HOST_PROPERTIES_EXT;
+
+    mBufferDeviceAddressFeatures = {};
+    mBufferDeviceAddressFeatures.sType =
+        VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_BUFFER_DEVICE_ADDRESS_FEATURES;
 
 #if defined(ANGLE_PLATFORM_ANDROID)
     mExternalFormatResolveFeatures = {};
@@ -3479,10 +3515,12 @@ void Renderer::queryDeviceExtensionFeatures(const vk::ExtensionNameList &deviceE
     mMaintenance3Properties.pNext                     = nullptr;
     mFaultFeatures.pNext                              = nullptr;
     mPhysicalDeviceAstcDecodeFeatures.pNext           = nullptr;
+    mUnifiedImageLayoutsFeatures.pNext                = nullptr;
     mShaderIntegerDotProductFeatures.pNext            = nullptr;
     mShaderIntegerDotProductProperties.pNext          = nullptr;
     mPhysicalDeviceGlobalPriorityQueryFeatures.pNext  = nullptr;
     mExternalMemoryHostProperties.pNext               = nullptr;
+    mBufferDeviceAddressFeatures.pNext                = nullptr;
 #if defined(ANGLE_PLATFORM_ANDROID)
     mExternalFormatResolveFeatures.pNext   = nullptr;
     mExternalFormatResolveProperties.pNext = nullptr;
@@ -3797,6 +3835,12 @@ void Renderer::enableDeviceExtensionsNotPromoted(const vk::ExtensionNameList &de
         vk::AddToPNextChain(&mEnabledFeatures, &mDynamicRenderingLocalReadFeatures);
     }
 
+    if (getFeatures().supportsUnifiedImageLayouts.enabled)
+    {
+        mEnabledDeviceExtensions.push_back(VK_KHR_UNIFIED_IMAGE_LAYOUTS_EXTENSION_NAME);
+        vk::AddToPNextChain(&mEnabledFeatures, &mUnifiedImageLayoutsFeatures);
+    }
+
     if (getFeatures().supportsImageCompressionControl.enabled)
     {
         mEnabledDeviceExtensions.push_back(VK_EXT_IMAGE_COMPRESSION_CONTROL_EXTENSION_NAME);
@@ -3900,6 +3944,7 @@ void Renderer::enableDeviceExtensionsPromotedTo11(const vk::ExtensionNameList &d
 // - VK_KHR_spirv_1_4
 // - VK_KHR_sampler_mirror_clamp_to_edge
 // - VK_KHR_depth_stencil_resolve
+// - VK_KHR_buffer_device_address
 //
 void Renderer::enableDeviceExtensionsPromotedTo12(const vk::ExtensionNameList &deviceExtensionNames)
 {
@@ -3977,6 +4022,11 @@ void Renderer::enableDeviceExtensionsPromotedTo12(const vk::ExtensionNameList &d
     {
         mEnabledDeviceExtensions.push_back(VK_KHR_UNIFORM_BUFFER_STANDARD_LAYOUT_EXTENSION_NAME);
         vk::AddToPNextChain(&mEnabledFeatures, &mUniformBufferStandardLayoutFeatures);
+    }
+    if (mFeatures.supportsBufferDeviceAddress.enabled)
+    {
+        mEnabledDeviceExtensions.push_back(VK_KHR_BUFFER_DEVICE_ADDRESS_EXTENSION_NAME);
+        vk::AddToPNextChain(&mEnabledFeatures, &mBufferDeviceAddressFeatures);
     }
 }
 
@@ -4192,6 +4242,10 @@ void Renderer::initDeviceExtensionEntryPoints()
         if (mFeatures.supportsRenderpass2.enabled)
         {
             InitRenderPass2KHRFunctions(mDevice);
+        }
+        if (mFeatures.supportsBufferDeviceAddress.enabled)
+        {
+            InitBufferDeviceAddressFunctions(mDevice);
         }
     }
     // Extensions promoted to Vulkan 1.3
@@ -4483,8 +4537,8 @@ angle::Result Renderer::createDeviceAndQueue(vk::ErrorContext *context, uint32_t
     // Initialize the barrierData tables by removing unsupported pipeline stage bits
     InitializeEventStageToVkPipelineStageFlagsMap(&mEventStageToPipelineStageFlagsMap,
                                                   ~unsupportedStages);
-    InitializeImageLayoutAndMemoryBarrierDataMap(&mImageLayoutAndMemoryBarrierDataMap,
-                                                 ~unsupportedStages);
+    InitializeImageLayoutAndMemoryBarrierDataMap(
+        getFeatures(), &mImageLayoutAndMemoryBarrierDataMap, ~unsupportedStages);
 
     ANGLE_TRY(initializeMemoryAllocator(context));
 
@@ -4548,6 +4602,13 @@ void Renderer::initializeValidationMessageSuppressions()
         mSkippedValidationMessages.insert(
             mSkippedValidationMessages.end(), kNoMaintenance9SkippedMessages,
             kNoMaintenance9SkippedMessages + ArraySize(kNoMaintenance9SkippedMessages));
+    }
+
+    if (getFeatures().preferBGR565ToRGB565.enabled)
+    {
+        mSkippedValidationMessages.insert(
+            mSkippedValidationMessages.end(), kPreferBGR565SkippedMessages,
+            kPreferBGR565SkippedMessages + ArraySize(kPreferBGR565SkippedMessages));
     }
 
     if (getFeatures().useVkEventForImageBarrier.enabled &&
@@ -5451,11 +5512,13 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
 
     // http://anglebug.com/42261756
     // Precision qualifiers are disabled for Pixel 2 before the driver included relaxed precision.
+    const bool isPixel4 =
+        IsPixel4(mPhysicalDeviceProperties.vendorID, mPhysicalDeviceProperties.deviceID);
     ANGLE_FEATURE_CONDITION(
         &mFeatures, enablePrecisionQualifiers,
         !(IsPixel2(mPhysicalDeviceProperties.vendorID, mPhysicalDeviceProperties.deviceID) &&
           (driverVersion < angle::VersionTriple(512, 490, 0))) &&
-            !IsPixel4(mPhysicalDeviceProperties.vendorID, mPhysicalDeviceProperties.deviceID));
+            !isPixel4);
 
     // http://anglebug.com/42265957
     ANGLE_FEATURE_CONDITION(&mFeatures, varyingsRequireMatchingPrecisionInSpirv,
@@ -5595,8 +5658,7 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
     ANGLE_FEATURE_CONDITION(
         &mFeatures, exposeES32ForTesting,
         mFeatures.exposeNonConformantExtensionsAndVersions.enabled &&
-            (isSoftwareRenderer ||
-             IsPixel4(mPhysicalDeviceProperties.vendorID, mPhysicalDeviceProperties.deviceID) ||
+            (isSoftwareRenderer || isPixel4 ||
              (IsLinux() && isNvidia && driverVersion < angle::VersionTriple(441, 0, 0)) ||
              (IsWindows() && isIntel)));
 
@@ -5742,6 +5804,12 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
 
     // Use VMA for image suballocation.
     ANGLE_FEATURE_CONDITION(&mFeatures, useVmaForImageSuballocation, true);
+
+    // Some platforms perform better using BGR565 than RGB565.
+    bool isBGR565Renderable = hasImageFormatFeatureBits(angle::FormatID::B5G6R5_UNORM,
+                                                        VK_FORMAT_FEATURE_COLOR_ATTACHMENT_BIT);
+    ANGLE_FEATURE_CONDITION(&mFeatures, preferBGR565ToRGB565,
+                            isBGR565Renderable && isQualcomm && !isPixel4);
 
     // Emit SPIR-V 1.4 when supported.  The following old drivers have various bugs with SPIR-V 1.4:
     //
@@ -6024,19 +6092,22 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
 
     // To avoid memory bloating due to using pipeline caches per program, the pipeline cache in the
     // renderer can be used.
-    ANGLE_FEATURE_CONDITION(&mFeatures, preferGlobalPipelineCache, isNvidia || (isAMD && !isRADV));
+    ANGLE_FEATURE_CONDITION(&mFeatures, preferGlobalPipelineCache,
+                            isNvidia || (isAMD && !isRADV) || isSamsung);
 
     // Whether the pipeline caches should merge into the global pipeline cache.  This should only be
     // enabled on platforms if:
     //
+    // - preferGlobalPipelineCache is not enabled
     // - VK_EXT_graphics_pipeline_library is not supported.  In that case, only the program's cache
     //   used during warm up is merged into the global cache for later monolithic pipeline creation.
     // - VK_EXT_graphics_pipeline_library is supported, monolithic pipelines are preferred, and the
     //   driver is able to reuse blobs from partial pipelines when creating monolithic pipelines.
     ANGLE_FEATURE_CONDITION(&mFeatures, mergeProgramPipelineCachesToGlobalCache,
-                            !mFeatures.supportsGraphicsPipelineLibrary.enabled ||
-                                (mFeatures.preferMonolithicPipelinesOverLibraries.enabled &&
-                                 libraryBlobsAreReusedByMonolithicPipelines));
+                            !mFeatures.preferGlobalPipelineCache.enabled &&
+                                (!mFeatures.supportsGraphicsPipelineLibrary.enabled ||
+                                 (mFeatures.preferMonolithicPipelinesOverLibraries.enabled &&
+                                  libraryBlobsAreReusedByMonolithicPipelines)));
 
     ANGLE_FEATURE_CONDITION(&mFeatures, enableAsyncPipelineCacheCompression, true);
 
@@ -6344,6 +6415,11 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
     // currently disabled.
     ANGLE_FEATURE_CONDITION(&mFeatures, supportsClipCullDistanceInGSAndTS, false);
 
+    // http://anglebug.com/442950569
+    // feature is currently experimental (i.e. dont default enable even if device supports it)
+    // keep it as an opt-in override instead
+    ANGLE_FEATURE_CONDITION(&mFeatures, supportsBufferDeviceAddress, false);
+
     // Disable memory report feature overrides if extension is not supported.
     if ((mFeatures.logMemoryReportCallbacks.enabled || mFeatures.logMemoryReportStats.enabled) &&
         !mMemoryReportFeatures.deviceMemoryReport)
@@ -6390,9 +6466,16 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
 
     // http://anglebug.com/440941211:
     // Disable the feature on Windows Intel because some shaders using 16-bit floats crash
+    // http://crbug.com/443182226:
+    // Temporarily disable the feature because webgl_conformance_vulkan_passthrough_tests are
+    // failing.
     ANGLE_FEATURE_CONDITION(&mFeatures, convertLowpAndMediumpFloatUniformsTo16Bits,
                             m16BitStorageFeatures.uniformAndStorageBuffer16BitAccess == VK_TRUE &&
-                                !(IsWindows() && isIntel));
+                                mShaderFloat16Int8Features.shaderFloat16 == VK_TRUE &&
+                                !(IsWindows() && isIntel) && false);
+
+    ANGLE_FEATURE_CONDITION(&mFeatures, supportsUnifiedImageLayouts,
+                            mUnifiedImageLayoutsFeatures.unifiedImageLayouts == VK_TRUE);
 
     ANGLE_FEATURE_CONDITION(
         &mFeatures, supportsGlobalPriority,
@@ -6501,7 +6584,6 @@ angle::Result Renderer::getPipelineCache(vk::ErrorContext *context,
 
     angle::SimpleMutex *pipelineCacheMutex =
         context->getFeatures().mergeProgramPipelineCachesToGlobalCache.enabled ||
-                context->getFeatures().preferGlobalPipelineCache.enabled ||
                 context->getFeatures().preferMonolithicPipelinesOverLibraries.enabled
             ? &mPipelineCacheMutex
             : nullptr;

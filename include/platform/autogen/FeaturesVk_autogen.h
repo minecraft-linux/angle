@@ -494,12 +494,6 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
-    FeatureInfo compressVertexData = {
-        "compressVertexData",
-        FeatureCategory::VulkanWorkarounds,
-        &members,
-    };
-
     FeatureInfo preferDrawClearOverVkCmdClearAttachments = {
         "preferDrawClearOverVkCmdClearAttachments",
         FeatureCategory::VulkanWorkarounds,
@@ -1532,6 +1526,12 @@ struct FeaturesVk : FeatureSetBase
         &members,
     };
 
+    FeatureInfo supportsUnifiedImageLayouts = {
+        "supportsUnifiedImageLayouts",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
     FeatureInfo supportsGlobalPriority = {
         "supportsGlobalPriority",
         FeatureCategory::VulkanFeatures,
@@ -1540,6 +1540,24 @@ struct FeaturesVk : FeatureSetBase
 
     FeatureInfo supportsGlobalPriorityQuery = {
         "supportsGlobalPriorityQuery",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo supportsBufferDeviceAddress = {
+        "supportsBufferDeviceAddress",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo preferBGR565ToRGB565 = {
+        "preferBGR565ToRGB565",
+        FeatureCategory::VulkanFeatures,
+        &members,
+    };
+
+    FeatureInfo clSerializedExecution = {
+        "clSerializedExecution",
         FeatureCategory::VulkanFeatures,
         &members,
     };
