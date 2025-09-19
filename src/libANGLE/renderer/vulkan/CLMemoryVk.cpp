@@ -259,9 +259,9 @@ vk::BufferHelper &CLBufferVk::getBuffer()
     return mBuffer;
 }
 
-angle::Result CLBufferVk::syncHost(CLBufferVk::SyncHostDirection direction,
-                                   size_t offset,
-                                   size_t size)
+// For UHP buffers, the buffer contents and hostptr have to be in sync at appropriate times. Ensure
+// that if zero copy is not supported.
+angle::Result CLBufferVk::syncHost(CLBufferVk::SyncHostDirection direction)
 {
     switch (direction)
     {
@@ -276,7 +276,7 @@ angle::Result CLBufferVk::syncHost(CLBufferVk::SyncHostDirection direction,
         case CLBufferVk::SyncHostDirection::ToHost:
             if (getFlags().intersects(CL_MEM_USE_HOST_PTR) && !supportsZeroCopy())
             {
-                ANGLE_TRY(copyTo(getHostPtr(), offset, size));
+                ANGLE_TRY(copyTo(getHostPtr(), 0, getSize()));
             }
             break;
         default:
@@ -286,22 +286,22 @@ angle::Result CLBufferVk::syncHost(CLBufferVk::SyncHostDirection direction,
     return angle::Result::Continue;
 }
 
-angle::Result CLBufferVk::syncHost(CLBufferVk::SyncHostDirection direction,
-                                   cl::BufferRect bufferRect,
-                                   cl::BufferRect hostRect)
+// This is to sync only a rectangular region between hostptr and buffer contents. Intended to be
+// used for READ/WRITE_RECT.
+angle::Result CLBufferVk::syncHost(CLBufferVk::SyncHostDirection direction, cl::BufferRect hostRect)
 {
     switch (direction)
     {
         case CLBufferVk::SyncHostDirection::FromHost:
             if (getFlags().intersects(CL_MEM_USE_HOST_PTR) && !supportsZeroCopy())
             {
-                ANGLE_TRY(setRect(getHostPtr(), bufferRect, hostRect));
+                ANGLE_TRY(setRect(getHostPtr(), hostRect, hostRect));
             }
             break;
         case CLBufferVk::SyncHostDirection::ToHost:
             if (getFlags().intersects(CL_MEM_USE_HOST_PTR) && !supportsZeroCopy())
             {
-                ANGLE_TRY(getRect(bufferRect, hostRect, getHostPtr()));
+                ANGLE_TRY(getRect(hostRect, hostRect, getHostPtr()));
             }
             break;
         default:
@@ -342,7 +342,7 @@ angle::Result CLBufferVk::create(void *hostPtr)
             ANGLE_CL_IMPL_TRY_ERROR(setDataImpl(static_cast<uint8_t *>(hostPtr), getSize(), 0),
                                     CL_OUT_OF_RESOURCES);
         }
-        ANGLE_TRY(syncHost(CLBufferVk::SyncHostDirection::FromHost, 0, getSize()));
+        ANGLE_TRY(syncHost(CLBufferVk::SyncHostDirection::FromHost));
     }
     return angle::Result::Continue;
 }
@@ -389,14 +389,14 @@ angle::Result CLBufferVk::copyToWithPitch(void *hostPtr,
                                           size_t size,
                                           size_t rowPitch,
                                           size_t slicePitch,
-                                          cl::Coordinate region,
+                                          cl::Extents region,
                                           const size_t elementSize)
 {
     uint8_t *ptrInBase  = nullptr;
     uint8_t *ptrOutBase = nullptr;
     cl::BufferRect stagingBufferRect{
         {static_cast<int>(0), static_cast<int>(0), static_cast<int>(0)},
-        {region.x, region.y, region.z},
+        {region.width, region.height, region.depth},
         0,
         0,
         elementSize};
@@ -405,15 +405,15 @@ angle::Result CLBufferVk::copyToWithPitch(void *hostPtr,
     ANGLE_TRY(mapBufferHelper(ptrInBase));
     cl::Defer deferUnmap([this]() { unmapBufferHelper(); });
 
-    for (size_t slice = 0; slice < region.z; slice++)
+    for (size_t slice = 0; slice < region.depth; slice++)
     {
-        for (size_t row = 0; row < region.y; row++)
+        for (size_t row = 0; row < region.height; row++)
         {
             size_t stagingBufferOffset = stagingBufferRect.getRowOffset(slice, row);
             size_t hostPtrOffset       = (slice * slicePitch + row * rowPitch);
             uint8_t *dst               = ptrOutBase + hostPtrOffset;
             uint8_t *src               = ptrInBase + stagingBufferOffset;
-            memcpy(dst, src, region.x * elementSize);
+            memcpy(dst, src, region.width * elementSize);
         }
     }
     return angle::Result::Continue;
@@ -455,56 +455,64 @@ void CLBufferVk::unmapBufferHelper()
     mMappedMemory = nullptr;
 }
 
-angle::Result CLBufferVk::setRect(const void *data,
-                                  const cl::BufferRect &srcRect,
-                                  const cl::BufferRect &rect)
+angle::Result CLBufferVk::updateRect(UpdateRectOperation op,
+                                     void *data,
+                                     const cl::BufferRect &dataRect,
+                                     const cl::BufferRect &bufferRect)
 {
-    ASSERT(srcRect.valid() && rect.valid());
-    ASSERT(srcRect.mSize == rect.mSize);
+    ASSERT(dataRect.valid() && bufferRect.valid());
+    ASSERT(dataRect.mSize == bufferRect.mSize && dataRect.mElementSize == bufferRect.mElementSize);
 
-    uint8_t *mapPtr = nullptr;
-    ANGLE_TRY(mapBufferHelper(mapPtr));
+    uint8_t *bufferPtr = nullptr;
+    ANGLE_TRY(mapBufferHelper(bufferPtr));
     cl::Defer deferUnmap([this]() { unmapBufferHelper(); });
 
-    const uint8_t *srcData = reinterpret_cast<const uint8_t *>(data);
-    for (size_t slice = 0; slice < rect.mSize.depth; slice++)
+    uint8_t *dataUint8Ptr = reinterpret_cast<uint8_t *>(data);
+    for (size_t slice = 0; slice < bufferRect.mSize.depth; slice++)
     {
-        for (size_t row = 0; row < rect.mSize.height; row++)
+        for (size_t row = 0; row < bufferRect.mSize.height; row++)
         {
-            const uint8_t *src = srcData + srcRect.getRowOffset(slice, row);
-            uint8_t *dst       = mapPtr + rect.getRowOffset(slice, row);
+            uint8_t *offsetDataPtr   = dataUint8Ptr + dataRect.getRowOffset(slice, row);
+            uint8_t *offsetBufferPtr = bufferPtr + bufferRect.getRowOffset(slice, row);
+            size_t updateSize        = dataRect.mSize.width * dataRect.mElementSize;
 
-            memcpy(dst, src, srcRect.mSize.width * srcRect.mElementSize);
+            switch (op)
+            {
+                case UpdateRectOperation::Read:
+                {
+                    // Read from this buffer
+                    memcpy(offsetDataPtr, offsetBufferPtr, updateSize);
+                    break;
+                }
+                case UpdateRectOperation::Write:
+                {
+                    // Write to this buffer
+                    memcpy(offsetBufferPtr, offsetDataPtr, updateSize);
+                    break;
+                }
+                default:
+                {
+                    UNREACHABLE();
+                    break;
+                }
+            }
         }
     }
-
     return angle::Result::Continue;
 }
 
-angle::Result CLBufferVk::getRect(const cl::BufferRect &srcRect,
-                                  const cl::BufferRect &outRect,
+angle::Result CLBufferVk::setRect(const void *data,
+                                  const cl::BufferRect &dataRect,
+                                  const cl::BufferRect &bufferRect)
+{
+    return updateRect(UpdateRectOperation::Write, const_cast<void *>(data), dataRect, bufferRect);
+}
+
+angle::Result CLBufferVk::getRect(const cl::BufferRect &bufferRect,
+                                  const cl::BufferRect &dataRect,
                                   void *outData)
 {
-    ASSERT(srcRect.valid() && outRect.valid());
-    ASSERT(srcRect.mSize == outRect.mSize);
-
-    uint8_t *mapPtr = nullptr;
-    ANGLE_TRY(mapBufferHelper(mapPtr));
-    cl::Defer deferUnmap([this]() { unmapBufferHelper(); });
-
-    uint8_t *dstData = reinterpret_cast<uint8_t *>(outData);
-    for (size_t slice = 0; slice < srcRect.mSize.depth; slice++)
-    {
-        for (size_t row = 0; row < srcRect.mSize.height; row++)
-        {
-            const uint8_t *src = mapPtr + srcRect.getRowOffset(slice, row);
-            uint8_t *dst       = dstData + outRect.getRowOffset(slice, row);
-
-            memcpy(dst, src, srcRect.mSize.width * srcRect.mElementSize);
-        }
-    }
-
-    return angle::Result::Continue;
+    return updateRect(UpdateRectOperation::Read, outData, dataRect, bufferRect);
 }
 
 // offset is for mapped pointer
@@ -652,14 +660,15 @@ angle::Result CLImageVk::copyStagingTo(void *ptr, size_t offset, size_t size)
 }
 
 angle::Result CLImageVk::copyStagingToFromWithPitch(void *hostPtr,
-                                                    const cl::Coordinate &region,
+                                                    const cl::Extents &region,
                                                     const size_t rowPitch,
                                                     const size_t slicePitch,
                                                     StagingBufferCopyDirection copyStagingTo)
 {
     uint8_t *ptrInBase  = nullptr;
     uint8_t *ptrOutBase = nullptr;
-    cl::BufferRect stagingBufferRect{{}, {region.x, region.y, region.z}, 0, 0, getElementSize()};
+    cl::BufferRect stagingBufferRect{
+        {}, {region.width, region.height, region.depth}, 0, 0, getElementSize()};
 
     if (copyStagingTo == StagingBufferCopyDirection::ToHost)
     {
@@ -673,9 +682,9 @@ angle::Result CLImageVk::copyStagingToFromWithPitch(void *hostPtr,
     }
     cl::Defer deferUnmap([this]() { unmapBufferHelper(); });
 
-    for (size_t slice = 0; slice < region.z; slice++)
+    for (size_t slice = 0; slice < region.depth; slice++)
     {
-        for (size_t row = 0; row < region.y; row++)
+        for (size_t row = 0; row < region.height; row++)
         {
             size_t stagingBufferOffset = stagingBufferRect.getRowOffset(slice, row);
             size_t hostPtrOffset       = (slice * slicePitch + row * rowPitch);
@@ -685,7 +694,7 @@ angle::Result CLImageVk::copyStagingToFromWithPitch(void *hostPtr,
             uint8_t *src               = (copyStagingTo == StagingBufferCopyDirection::ToHost)
                                              ? ptrInBase + stagingBufferOffset
                                              : ptrInBase + hostPtrOffset;
-            memcpy(dst, src, region.x * getElementSize());
+            memcpy(dst, src, region.width * getElementSize());
         }
     }
     return angle::Result::Continue;
@@ -776,9 +785,9 @@ angle::Result CLImageVk::create(void *hostPtr)
         copyRegion.bufferImageHeight = 0;
         copyRegion.imageExtent =
             cl_vk::GetExtent(getExtentForCopy({mExtent.width, mExtent.height, mExtent.depth}));
-        copyRegion.imageOffset      = cl_vk::GetOffset(getOffsetForCopy(cl::kMemOffsetsZero));
+        copyRegion.imageOffset      = cl_vk::GetOffset(cl::kOffsetZero);
         copyRegion.imageSubresource = getSubresourceLayersForCopy(
-            cl::kMemOffsetsZero, {mExtent.width, mExtent.height, mExtent.depth}, getType(),
+            cl::kOffsetZero, {mExtent.width, mExtent.height, mExtent.depth}, getType(),
             ImageCopyWith::Buffer);
 
         // copy over the hostptr bits here to image in a one-off copy cmd
@@ -959,8 +968,8 @@ void CLImageVk::packPixels(const void *fillColor, PixelColor *packedColor)
     }
 }
 
-angle::Result CLImageVk::fillImageWithColor(const cl::MemOffsets &origin,
-                                            const cl::Coordinate &region,
+angle::Result CLImageVk::fillImageWithColor(const cl::Offset &origin,
+                                            const cl::Extents &region,
                                             PixelColor *packedColor)
 {
     size_t elementSize = getElementSize();
@@ -974,13 +983,13 @@ angle::Result CLImageVk::fillImageWithColor(const cl::MemOffsets &origin,
     uint8_t *ptrBase = imagePtr + (origin.z * stagingBufferRect.getSlicePitch()) +
                        (origin.y * stagingBufferRect.getRowPitch()) + (origin.x * elementSize);
 
-    for (size_t slice = 0; slice < region.z; slice++)
+    for (size_t slice = 0; slice < region.depth; slice++)
     {
-        for (size_t row = 0; row < region.y; row++)
+        for (size_t row = 0; row < region.height; row++)
         {
             size_t stagingBufferOffset = stagingBufferRect.getRowOffset(slice, row);
             uint8_t *pixelPtr          = ptrBase + stagingBufferOffset;
-            for (size_t x = 0; x < region.x; x++)
+            for (size_t x = 0; x < region.width; x++)
             {
                 memcpy(pixelPtr, packedColor, elementSize);
                 pixelPtr += elementSize;
@@ -991,12 +1000,12 @@ angle::Result CLImageVk::fillImageWithColor(const cl::MemOffsets &origin,
     return angle::Result::Continue;
 }
 
-cl::Extents CLImageVk::getExtentForCopy(const cl::Coordinate &region)
+cl::Extents CLImageVk::getExtentForCopy(const cl::Extents &region)
 {
     cl::Extents extent = {};
-    extent.width       = region.x;
-    extent.height      = region.y;
-    extent.depth       = region.z;
+    extent.width       = region.width;
+    extent.height      = region.height;
+    extent.depth       = region.depth;
     switch (getDescriptor().type)
     {
         case cl::MemObjectType::Image1D_Array:
@@ -1013,7 +1022,7 @@ cl::Extents CLImageVk::getExtentForCopy(const cl::Coordinate &region)
     return extent;
 }
 
-cl::Offset CLImageVk::getOffsetForCopy(const cl::MemOffsets &origin)
+cl::Offset CLImageVk::getOffsetForCopy(const cl::Offset &origin)
 {
     cl::Offset offset = {};
     offset.x          = origin.x;
@@ -1034,8 +1043,8 @@ cl::Offset CLImageVk::getOffsetForCopy(const cl::MemOffsets &origin)
     return offset;
 }
 
-VkImageSubresourceLayers CLImageVk::getSubresourceLayersForCopy(const cl::MemOffsets &origin,
-                                                                const cl::Coordinate &region,
+VkImageSubresourceLayers CLImageVk::getSubresourceLayersForCopy(const cl::Offset &origin,
+                                                                const cl::Extents &region,
                                                                 cl::MemObjectType copyToType,
                                                                 ImageCopyWith imageCopy)
 {
@@ -1048,7 +1057,7 @@ VkImageSubresourceLayers CLImageVk::getSubresourceLayersForCopy(const cl::MemOff
             subresource.baseArrayLayer = static_cast<uint32_t>(origin.y);
             if (imageCopy == ImageCopyWith::Image)
             {
-                subresource.layerCount = static_cast<uint32_t>(region.y);
+                subresource.layerCount = static_cast<uint32_t>(region.height);
             }
             else
             {
@@ -1064,7 +1073,7 @@ VkImageSubresourceLayers CLImageVk::getSubresourceLayersForCopy(const cl::MemOff
             }
             else if (imageCopy == ImageCopyWith::Image)
             {
-                subresource.layerCount = static_cast<uint32_t>(region.z);
+                subresource.layerCount = static_cast<uint32_t>(region.depth);
             }
             else
             {

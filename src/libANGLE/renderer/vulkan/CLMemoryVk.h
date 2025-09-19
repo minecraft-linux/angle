@@ -110,7 +110,7 @@ class CLBufferVk : public CLMemoryVk
                                   size_t size,
                                   size_t rowPitch,
                                   size_t slicePitch,
-                                  cl::Coordinate region,
+                                  cl::Extents region,
                                   const size_t elementSize);
 
     angle::Result fillWithPattern(const void *pattern,
@@ -125,10 +125,10 @@ class CLBufferVk : public CLMemoryVk
     bool isSubBuffer() const { return mParent != nullptr; }
 
     angle::Result setRect(const void *data,
-                          const cl::BufferRect &srcRect,
+                          const cl::BufferRect &dataRect,
                           const cl::BufferRect &bufferRect);
-    angle::Result getRect(const cl::BufferRect &srcRect,
-                          const cl::BufferRect &outRect,
+    angle::Result getRect(const cl::BufferRect &bufferRect,
+                          const cl::BufferRect &dataRect,
                           void *outData);
 
     bool isCurrentlyInUse() const override;
@@ -140,10 +140,8 @@ class CLBufferVk : public CLMemoryVk
         ToHost,
         FromHost
     };
-    angle::Result syncHost(CLBufferVk::SyncHostDirection direction, size_t offset, size_t size);
-    angle::Result syncHost(CLBufferVk::SyncHostDirection direction,
-                           cl::BufferRect bufferRect,
-                           cl::BufferRect hostRect);
+    angle::Result syncHost(CLBufferVk::SyncHostDirection direction);
+    angle::Result syncHost(CLBufferVk::SyncHostDirection direction, cl::BufferRect hostRect);
 
   private:
     angle::Result mapBufferHelper(uint8_t *&ptrOut) override;
@@ -151,6 +149,16 @@ class CLBufferVk : public CLMemoryVk
     void unmapBufferHelper() override;
     angle::Result setDataImpl(const uint8_t *data, size_t size, size_t offset);
     angle::Result createWithProperties();
+
+    enum class UpdateRectOperation
+    {
+        Read,
+        Write
+    };
+    angle::Result updateRect(UpdateRectOperation readWriteOp,
+                             void *data,
+                             const cl::BufferRect &dataRect,
+                             const cl::BufferRect &bufferRect);
 
     vk::BufferHelper mBuffer;
     VkBufferCreateInfo mDefaultBufferCreateInfo;
@@ -198,7 +206,7 @@ class CLImageVk : public CLMemoryVk
     angle::Result copyStagingFrom(void *ptr, size_t offset, size_t size);
     angle::Result copyStagingTo(void *ptr, size_t offset, size_t size);
     angle::Result copyStagingToFromWithPitch(void *ptr,
-                                             const cl::Coordinate &region,
+                                             const cl::Extents &region,
                                              const size_t rowPitch,
                                              const size_t slicePitch,
                                              StagingBufferCopyDirection copyStagingTo);
@@ -207,13 +215,13 @@ class CLImageVk : public CLMemoryVk
     cl::Extents getImageExtent() const { return mExtent; }
     vk::ImageView &getImageView() { return mImageView; }
     void packPixels(const void *fillColor, PixelColor *packedColor);
-    angle::Result fillImageWithColor(const cl::MemOffsets &origin,
-                                     const cl::Coordinate &region,
+    angle::Result fillImageWithColor(const cl::Offset &origin,
+                                     const cl::Extents &region,
                                      PixelColor *packedColor);
-    cl::Extents getExtentForCopy(const cl::Coordinate &region);
-    cl::Offset getOffsetForCopy(const cl::MemOffsets &origin);
-    VkImageSubresourceLayers getSubresourceLayersForCopy(const cl::MemOffsets &origin,
-                                                         const cl::Coordinate &region,
+    cl::Offset getOffsetForCopy(const cl::Offset &origin);
+    cl::Extents getExtentForCopy(const cl::Extents &region);
+    VkImageSubresourceLayers getSubresourceLayersForCopy(const cl::Offset &origin,
+                                                         const cl::Extents &region,
                                                          cl::MemObjectType copyToType,
                                                          ImageCopyWith imageCopy);
 
