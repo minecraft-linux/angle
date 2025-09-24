@@ -894,6 +894,9 @@ angle::ObjCPtr<id<MTLLibrary>> CreateShaderLibrary(
         // Mark all positions in VS with attribute invariant as non-optimizable
         options.get().preserveInvariance = usesInvariance;
 
+// mathMode and mathFloatingPointFunctions are only available with macOS 15+ and iPhoneOS 18+
+#if __MAC_OS_X_VERSION_MAX_ALLOWED >= 150000 || __IPHONE_OS_VERSION_MAX_ALLOWED >= 180000 || \
+    __TV_OS_VERSION_MAX_ALLOWED >= 180000 || TARGET_OS_VISION
         if (@available(macOS 15.0, iOS 18.0, *))
         {
             if (disableFastMath)
@@ -908,6 +911,7 @@ angle::ObjCPtr<id<MTLLibrary>> CreateShaderLibrary(
             }
         }
         else
+#endif
         {
             options.get().fastMathEnabled = !disableFastMath;
         }

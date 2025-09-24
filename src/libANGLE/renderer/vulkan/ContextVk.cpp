@@ -2115,14 +2115,18 @@ angle::Result ContextVk::handleDirtyGraphicsDefaultAttribs(DirtyBits::Iterator *
                                                            DirtyBits dirtyBitMask)
 {
     ASSERT(mDirtyDefaultAttribsMask.any());
-
-    gl::AttributesMask attribsMask =
-        mDirtyDefaultAttribsMask & mState.getProgramExecutable()->getAttributesMask();
     VertexArrayVk *vertexArrayVk = getVertexArray();
+
+    gl::AttributesMask attribsMask = mDirtyDefaultAttribsMask;
+    attribsMask &= ~vertexArrayVk->getCurrentEnabledAttributesMask();
+    attribsMask &= mState.getProgramExecutable()->getAttributesMask();
+
     for (size_t attribIndex : attribsMask)
     {
         ANGLE_TRY(vertexArrayVk->updateDefaultAttrib(this, attribIndex));
     }
+
+    ANGLE_TRY(onVertexArrayChange(attribsMask));
 
     mDirtyDefaultAttribsMask.reset();
     return angle::Result::Continue;
@@ -2604,7 +2608,7 @@ angle::Result ContextVk::handleDirtyGraphicsVertexBuffersVertexInputDynamicState
     ASSERT(getFeatures().supportsVertexInputDynamicState.enabled);
     const gl::ProgramExecutable *executable = mState.getProgramExecutable();
     VertexArrayVk *vertexArrayVk            = getVertexArray();
-    uint32_t maxAttrib = mState.getProgramExecutable()->getMaxActiveAttribLocation();
+    const uint32_t maxAttrib = mState.getProgramExecutable()->getMaxActiveAttribLocation();
     const gl::AttribArray<VkBuffer> &bufferHandles = vertexArrayVk->getCurrentArrayBufferHandles();
     const gl::AttribArray<VkDeviceSize> &bufferOffsets =
         vertexArrayVk->getCurrentArrayBufferOffsets();
@@ -2680,9 +2684,22 @@ angle::Result ContextVk::handleDirtyGraphicsVertexBuffersVertexInputDynamicState
 
     if (maxAttrib > 0)
     {
+        if (getFeatures().useVertexInputBindingStrideDynamicState.enabled)
+        {
+            const gl::AttribArray<VkDeviceSize> &bufferSizes =
+                vertexArrayVk->getCurrentArrayBufferSizes();
 
-        mRenderPassCommandBuffer->bindVertexBuffers(0, maxAttrib, bufferHandles.data(),
-                                                    bufferOffsets.data());
+            // bindVertexBuffers2EXT() requires extended dynamic state or shader object extension.
+            // Since the strides are already set in setVertexInput(), they need not be set here.
+            ASSERT(getFeatures().supportsExtendedDynamicState.enabled);
+            mRenderPassCommandBuffer->bindVertexBuffers2NoStride(
+                0, maxAttrib, bufferHandles.data(), bufferOffsets.data(), bufferSizes.data());
+        }
+        else
+        {
+            mRenderPassCommandBuffer->bindVertexBuffers(0, maxAttrib, bufferHandles.data(),
+                                                        bufferOffsets.data());
+        }
     }
     // Mark all active vertex buffers as accessed.
     mRenderPassCommands->buffersVertexAttribRead(this, vertexArrayVk->getCurrentArrayBuffers(),
@@ -2698,12 +2715,12 @@ angle::Result ContextVk::handleDirtyGraphicsVertexBuffersVertexInputDynamicState
     ASSERT(!getFeatures().supportsVertexInputDynamicState.enabled);
     const gl::ProgramExecutable *executable = mState.getProgramExecutable();
     VertexArrayVk *vertexArrayVk            = getVertexArray();
-    uint32_t maxAttrib = mState.getProgramExecutable()->getMaxActiveAttribLocation();
+    const uint32_t maxAttrib = mState.getProgramExecutable()->getMaxActiveAttribLocation();
     const gl::AttribArray<VkBuffer> &bufferHandles = vertexArrayVk->getCurrentArrayBufferHandles();
     const gl::AttribArray<VkDeviceSize> &bufferOffsets =
         vertexArrayVk->getCurrentArrayBufferOffsets();
 
-    if (mRenderer->getFeatures().useVertexInputBindingStrideDynamicState.enabled)
+    if (getFeatures().useVertexInputBindingStrideDynamicState.enabled)
     {
         // Set stride to 0 for mismatching formats between the program's declared attribute and that
         // which is specified in glVertexAttribPointer.  See comment in vk_cache_utils.cpp
@@ -2713,6 +2730,8 @@ angle::Result ContextVk::handleDirtyGraphicsVertexBuffersVertexInputDynamicState
         const gl::ComponentTypeMask vertexAttributesTypeMask =
             vertexArrayVk->getCurrentVertexAttributesTypeMask();
         const gl::ComponentTypeMask &programAttribsTypeMask = executable->getAttributesTypeMask();
+        const gl::AttribArray<VkDeviceSize> &bufferSizes =
+            vertexArrayVk->getCurrentArrayBufferSizes();
         gl::AttribArray<VkDeviceSize> strides               = {};
 
         for (size_t attribIndex : activeAttribLocations)
@@ -2729,10 +2748,11 @@ angle::Result ContextVk::handleDirtyGraphicsVertexBuffersVertexInputDynamicState
                 mismatchingType ? 0 : vertexArrayVk->getCurrentArrayBufferStride(attribIndex);
         }
 
-        // TODO: Use the sizes parameters here to fix the robustness issue worked around in
-        // crbug.com/1310038
+        // bindVertexBuffers2EXT() requires the extension extended dynamic state or shader object.
+        ASSERT(getFeatures().supportsExtendedDynamicState.enabled);
         mRenderPassCommandBuffer->bindVertexBuffers2(0, maxAttrib, bufferHandles.data(),
-                                                     bufferOffsets.data(), nullptr, strides.data());
+                                                     bufferOffsets.data(), bufferSizes.data(),
+                                                     strides.data());
     }
     else
     {
@@ -9299,20 +9319,7 @@ void ContextVk::resetPerFramePerfCounters()
         .resetDescriptorCacheStats();
 }
 
-angle::Result ContextVk::ensureInterfacePipelineCache()
-{
-    if (!mInterfacePipelinesCache.valid())
-    {
-        VkPipelineCacheCreateInfo pipelineCacheCreateInfo = {};
-        pipelineCacheCreateInfo.sType = VK_STRUCTURE_TYPE_PIPELINE_CACHE_CREATE_INFO;
-
-        ANGLE_VK_TRY(this, mInterfacePipelinesCache.init(getDevice(), pipelineCacheCreateInfo));
-    }
-
-    return angle::Result::Continue;
-}
-
-angle::Result ContextVk::onVertexArrayChange(const gl::AttributesMask enabledAttribDirtyBits)
+angle::Result ContextVk::onVertexArrayChange(const gl::AttributesMask dirtyAttribBits)
 {
     const VertexArrayVk &vertexArray = *getVertexArray();
 
@@ -9320,7 +9327,7 @@ angle::Result ContextVk::onVertexArrayChange(const gl::AttributesMask enabledAtt
     {
         invalidateCurrentGraphicsPipeline();
 
-        for (size_t attribIndex : enabledAttribDirtyBits)
+        for (size_t attribIndex : dirtyAttribBits)
         {
             const GLuint staticStride =
                 mRenderer->getFeatures().useVertexInputBindingStrideDynamicState.enabled
@@ -9341,7 +9348,7 @@ angle::Result ContextVk::onVertexArrayChange(const gl::AttributesMask enabledAtt
     {
         const gl::AttribArray<vk::BufferHelper *> &buffers = vertexArray.getCurrentArrayBuffers();
         bool breakRenderPass                               = false;
-        for (size_t attribIndex : enabledAttribDirtyBits)
+        for (size_t attribIndex : dirtyAttribBits)
         {
             ASSERT(buffers[attribIndex] != nullptr);
             if (buffers[attribIndex]->writtenByCommandBuffer(mCurrentTransformFeedbackQueueSerial))
