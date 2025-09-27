@@ -43,7 +43,7 @@ vars = {
   'checkout_angle_mesa': False,
 
   # Version of Chromium our Chromium-based DEPS are mirrored from.
-  'chromium_revision': '3dc9d16aefb2affdb609c534e51a1ae0f6e0bd68',
+  'chromium_revision': 'a8396ec398975e5ee6efa499908260dddd8fd27a',
   # We never want to checkout chromium,
   # but need a dummy DEPS entry for the autoroller
   'dummy_checkout_chromium': False,
@@ -76,7 +76,7 @@ vars = {
   # Three lines of non-changing comments so that
   # the commit queue can handle CLs rolling catapult
   # and whatever else without interference from each other.
-  'catapult_revision': '1880cf769b9c94547938cd79236c824059c571fc',
+  'catapult_revision': 'e2b34e6c5df90b060797419372b230d5638a3843',
 
   # the commit queue can handle CLs rolling Fuchsia sdk
   # and whatever else without interference from each other.
@@ -279,6 +279,7 @@ vars = {
   'checkout_angle_restricted_trace_gwent_witcher_card_game': 'checkout_angle_restricted_traces',
   'checkout_angle_restricted_trace_happy_color': 'checkout_angle_restricted_traces',
   'checkout_angle_restricted_trace_harry_potter_hogwarts_mystery': 'checkout_angle_restricted_traces',
+  'checkout_angle_restricted_trace_harry_potter_magic_awakened': 'checkout_angle_restricted_traces',
   'checkout_angle_restricted_trace_hay_day': 'checkout_angle_restricted_traces',
   'checkout_angle_restricted_trace_hearthstone': 'checkout_angle_restricted_traces',
   'checkout_angle_restricted_trace_hero_wars': 'checkout_angle_restricted_traces',
@@ -509,12 +510,12 @@ vars = {
 deps = {
 
   'build': {
-    'url': Var('chromium_git') + '/chromium/src/build.git@d0fcc9d93702b85b34986e3a0f4e92f7234b3a89',
+    'url': Var('chromium_git') + '/chromium/src/build.git@a53bdd1c49678a892515853771e640e6cb65d657',
     'condition': 'not build_with_chromium',
   },
 
   'buildtools': {
-    'url': Var('chromium_git') + '/chromium/src/buildtools.git@6f5246ca99b01caae2fd74dca0afeef76d5dac74',
+    'url': Var('chromium_git') + '/chromium/src/buildtools.git@6b7117dcf645245b6c137eb6c61dfe17d4952707',
     'condition': 'not build_with_chromium',
   },
 
@@ -568,12 +569,12 @@ deps = {
   },
 
   'testing': {
-    'url': '{chromium_git}/chromium/src/testing@da0a671345d47bb452efe91921cddf43d12addbc',
+    'url': '{chromium_git}/chromium/src/testing@1ff7404922b7de34c38d4372b93e501181587c91',
     'condition': 'not build_with_chromium',
   },
 
   'third_party/abseil-cpp': {
-    'url': Var('chromium_git') + '/chromium/src/third_party/abseil-cpp@1785df7779eb7f584d3f8c625893ce8c3de53fa1',
+    'url': Var('chromium_git') + '/chromium/src/third_party/abseil-cpp@c3655ab8bb514aa318207c2685b3ba557a048201',
     'condition': 'not build_with_chromium',
   },
 
@@ -619,7 +620,7 @@ deps = {
       'packages': [
           {
                'package': 'chromium/third_party/android_build_tools/error_prone',
-               'version': 'qtE2WAvADZ8xIiG9JKU7PwWTsjruwLj4bwJa6jqxVpIC',
+               'version': 'qjoXMGvbc36wB6J_7ERVNhYaotHaTDdrny1PpdNJ1qMC',
           },
       ],
       'condition': 'checkout_android and not build_with_chromium',
@@ -641,7 +642,7 @@ deps = {
       'packages': [
           {
                'package': 'chromium/third_party/android_build_tools/lint',
-               'version': 'P8K_TqqlfAsVDdYQsTmShh1m5oAOuFLB2lnrpIXmprAC',
+               'version': 'KO0H7R4ln4nEeG8mUjEPEX03zNJL8KEL9a-Ock9_42UC',
           },
       ],
       'condition': 'checkout_android and not build_with_chromium',
@@ -652,7 +653,7 @@ deps = {
       'packages': [
           {
                'package': 'chromium/third_party/android_build_tools/manifest_merger',
-               'version': '8pUvvNgkyjHGP9B17Pbp1YwmjP4GKUXWl_qmEmKtYM0C',
+               'version': 'HrhZb4lTNAd5YEE1rNdZELRw7RXp3OZg-neKFvWAdY0C',
           },
       ],
       'condition': 'checkout_android and not build_with_chromium',
@@ -671,7 +672,7 @@ deps = {
   },
 
   'third_party/android_deps': {
-    'url': Var('chromium_git') + '/chromium/src/third_party/android_deps@e66626fb9ef895f58d218f4fb3c38f0476187b3d',
+    'url': Var('chromium_git') + '/chromium/src/third_party/android_deps@dc8d94d80c65ab737e6340758f575ea762f99f66',
     'condition': 'checkout_android and not build_with_chromium',
   },
 
@@ -783,7 +784,7 @@ deps = {
   },
 
   'third_party/depot_tools': {
-    'url': Var('chromium_git') + '/chromium/tools/depot_tools.git@838e4c6aa7b68d7a4de1c2f2cd516104d729eff3',
+    'url': Var('chromium_git') + '/chromium/tools/depot_tools.git@73e46667ed3a1326cf564747737b4e11137d7f29',
     'condition': 'not build_with_chromium',
   },
 
@@ -901,7 +902,7 @@ deps = {
    },
 
   'third_party/libc++/src': {
-    'url': Var('chromium_git') + '/external/github.com/llvm/llvm-project/libcxx.git@c662aee7f0e36f1477e3fa6839e408d0f2748775',
+    'url': Var('chromium_git') + '/external/github.com/llvm/llvm-project/libcxx.git@bcc74d7745a74dae059f1a4ca97e2979f5f77661',
     'condition': 'not build_with_chromium',
   },
 
@@ -911,12 +912,12 @@ deps = {
   },
 
   'third_party/llvm-libc/src': {
-    'url': Var('chromium_git') + '/external/github.com/llvm/llvm-project/libc.git@9f31af4aa9c60866dfc1f9f93dc994a278b2c1fa',
+    'url': Var('chromium_git') + '/external/github.com/llvm/llvm-project/libc.git@0388350fe90308d6c274af8f9ee2f1d6bcd28054',
     'condition': 'not build_with_chromium',
   },
 
   'third_party/libunwind/src': {
-    'url': Var('chromium_git') + '/external/github.com/llvm/llvm-project/libunwind.git@4a68b52b891115f2354534333d65ca181e90e586',
+    'url': Var('chromium_git') + '/external/github.com/llvm/llvm-project/libunwind.git@322be580a5a193a921c349a15747eeeb9a716ad1',
     'condition': 'not build_with_chromium',
   },
 
@@ -1017,7 +1018,7 @@ deps = {
       'packages': [
           {
               'package': 'chromium/third_party/r8',
-              'version': 'gt1-zSjnG7X9doAhlbcWFpH4PbBSW4tfzcbccnWr6cwC',
+              'version': 'llWUebGsQPrzc7z3fwJF78NcrdGs1wrUhy0Y-0Wrb-4C',
           },
       ],
       'condition': 'checkout_android and not build_with_chromium',
@@ -1039,7 +1040,7 @@ deps = {
   },
 
   'third_party/rust': {
-    'url': Var('chromium_git') + '/chromium/src/third_party/rust@f538b9f50809a3951394f61d7e39f6c216802a28',
+    'url': Var('chromium_git') + '/chromium/src/third_party/rust@667365a2aef07b2a9065a53beddbc8ea60ff5c6d',
     'condition': 'not build_with_chromium',
   },
 
@@ -1150,12 +1151,12 @@ deps = {
   },
 
   'tools/android': {
-    'url': Var('chromium_git') + '/chromium/src/tools/android@d6b5ee9c03913b2bb31fe50b356db5834658d574',
+    'url': Var('chromium_git') + '/chromium/src/tools/android@aba324bb723df0839f85a952bb2a8f945d77dd7c',
     'condition': 'checkout_android and not build_with_chromium',
   },
 
   'tools/clang': {
-    'url': Var('chromium_git') + '/chromium/src/tools/clang.git@cc42de7c589335b2dd4d9476a930937cfabdf1ae',
+    'url': Var('chromium_git') + '/chromium/src/tools/clang.git@b1d66053e6460f04dbe81d77cfeaa9a5d50dee3e',
     'condition': 'not build_with_chromium',
   },
 
@@ -1190,7 +1191,7 @@ deps = {
   },
 
   'tools/mb': {
-    'url': Var('chromium_git') + '/chromium/src/tools/mb@5f914d77d861b19f0b5979e2ecd44bfdb2c7de0d',
+    'url': Var('chromium_git') + '/chromium/src/tools/mb@e7c34dafbf17ce48b2829cf0cfe61f9f7bfecf4f',
     'condition': 'not build_with_chromium',
   },
 
@@ -1205,7 +1206,7 @@ deps = {
   },
 
   'tools/perf': {
-    'url': Var('chromium_git') + '/chromium/src/tools/perf@e4712e36b010ccc1c36adeb5ec1055d19c933484',
+    'url': Var('chromium_git') + '/chromium/src/tools/perf@d857988935aefbadc4e7b65add153d9e9c465e0a',
     'condition': 'not build_with_chromium',
   },
 
@@ -1220,7 +1221,7 @@ deps = {
   },
 
   'tools/rust': {
-    'url': Var('chromium_git') + '/chromium/src/tools/rust.git@6242e1f71679879a8e00bb86b4cbf31fbc26d443',
+    'url': Var('chromium_git') + '/chromium/src/tools/rust.git@f93e7ca2a64938e9b4759ec3297f02ca7b3f605f',
     'condition': 'not build_with_chromium',
   },
 
@@ -2648,6 +2649,16 @@ deps = {
       ],
       'dep_type': 'cipd',
       'condition': 'checkout_angle_restricted_trace_harry_potter_hogwarts_mystery',
+  },
+  'src/tests/restricted_traces/harry_potter_magic_awakened': {
+      'packages': [
+        {
+            'package': 'angle/traces/harry_potter_magic_awakened',
+            'version': 'version:1',
+        },
+      ],
+      'dep_type': 'cipd',
+      'condition': 'checkout_angle_restricted_trace_harry_potter_magic_awakened',
   },
   'src/tests/restricted_traces/hay_day': {
       'packages': [
