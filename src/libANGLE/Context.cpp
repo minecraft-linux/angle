@@ -3754,6 +3754,7 @@ void Context::setExtensionEnabled(const char *name, bool enabled)
             enableIfRequestable("GL_EXT_draw_buffers_indexed");
             enableIfRequestable("GL_EXT_color_buffer_float");
             enableIfRequestable("GL_EXT_color_buffer_half_float");
+            enableIfRequestable("GL_EXT_shader_framebuffer_fetch_non_coherent");
             enableIfRequestable("GL_ANGLE_shader_pixel_local_storage_coherent");
             enableIfRequestable("GL_ANGLE_shader_pixel_local_storage");
         }
@@ -8958,11 +8959,6 @@ bool Context::areBlobCacheFuncsSet() const
 
 void Context::pixelLocalStorageBarrier()
 {
-    if (getExtensions().shaderPixelLocalStorageCoherentANGLE)
-    {
-        return;
-    }
-
     Framebuffer *framebuffer = mState.getDrawFramebuffer();
     ASSERT(framebuffer);
     PixelLocalStorage &pls = framebuffer->getPixelLocalStorage(this);
@@ -10235,12 +10231,6 @@ void StateCache::initialize(Context *context)
     updateCanDraw(context);
 }
 
-void PrivateStateCache::initialize(const Context *context)
-{
-    updateVertexAttribTypesValidation(context);
-    mCachedBasicDrawElementsError = kInvalidPointer;
-}
-
 void StateCache::updateActiveAttribsMask(const Context *context)
 {
     bool isGLES1         = context->isGLES1();
@@ -10590,58 +10580,6 @@ void StateCache::updateTransformFeedbackActiveUnpaused(Context *context)
     mCachedTransformFeedbackActiveUnpaused = xfb && xfb->isActive() && !xfb->isPaused();
 }
 
-void PrivateStateCache::updateVertexAttribTypesValidation(const Context *context)
-{
-    VertexAttribTypeCase halfFloatValidity = (context->getExtensions().vertexHalfFloatOES)
-                                                 ? VertexAttribTypeCase::Valid
-                                                 : VertexAttribTypeCase::Invalid;
-
-    VertexAttribTypeCase vertexType1010102Validity = (context->getExtensions().vertexType1010102OES)
-                                                         ? VertexAttribTypeCase::ValidSize3or4
-                                                         : VertexAttribTypeCase::Invalid;
-
-    if (context->getClientVersion() < ES_3_0)
-    {
-        mCachedVertexAttribTypesValidation = {{
-            {VertexAttribType::Byte, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Short, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedByte, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedShort, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Float, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Fixed, VertexAttribTypeCase::Valid},
-            {VertexAttribType::HalfFloatOES, halfFloatValidity},
-        }};
-    }
-    else
-    {
-        mCachedVertexAttribTypesValidation = {{
-            {VertexAttribType::Byte, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Short, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Int, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedByte, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedShort, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedInt, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Float, VertexAttribTypeCase::Valid},
-            {VertexAttribType::HalfFloat, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Fixed, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Int2101010, VertexAttribTypeCase::ValidSize4Only},
-            {VertexAttribType::HalfFloatOES, halfFloatValidity},
-            {VertexAttribType::UnsignedInt2101010, VertexAttribTypeCase::ValidSize4Only},
-            {VertexAttribType::Int1010102, vertexType1010102Validity},
-            {VertexAttribType::UnsignedInt1010102, vertexType1010102Validity},
-        }};
-
-        mCachedIntegerVertexAttribTypesValidation = {{
-            {VertexAttribType::Byte, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Short, VertexAttribTypeCase::Valid},
-            {VertexAttribType::Int, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedByte, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedShort, VertexAttribTypeCase::Valid},
-            {VertexAttribType::UnsignedInt, VertexAttribTypeCase::Valid},
-        }};
-    }
-}
-
 void StateCache::updateActiveShaderStorageBufferIndices(Context *context)
 {
     mCachedActiveShaderStorageBufferIndices.reset();
@@ -10695,6 +10633,7 @@ bool StateCache::isCurrentContext(const Context *context,
            &context->getPrivateStateCache() == privateStateCache;
 }
 
+// PrivateStateCache implementation
 PrivateStateCache::PrivateStateCache()
     : mIsCachedBasicDrawStatesErrorValid(true),
       mIsCachedActiveAttribMasksValid(true),
@@ -10704,4 +10643,61 @@ PrivateStateCache::PrivateStateCache()
 
 PrivateStateCache::~PrivateStateCache() = default;
 
+void PrivateStateCache::initialize(const Context *context)
+{
+    updateVertexAttribTypesValidation(context);
+    mCachedBasicDrawElementsError = kInvalidPointer;
+}
+
+void PrivateStateCache::updateVertexAttribTypesValidation(const Context *context)
+{
+    VertexAttribTypeCase halfFloatValidity = (context->getExtensions().vertexHalfFloatOES)
+                                                 ? VertexAttribTypeCase::Valid
+                                                 : VertexAttribTypeCase::Invalid;
+
+    VertexAttribTypeCase vertexType1010102Validity = (context->getExtensions().vertexType1010102OES)
+                                                         ? VertexAttribTypeCase::ValidSize3or4
+                                                         : VertexAttribTypeCase::Invalid;
+
+    if (context->getClientVersion() < ES_3_0)
+    {
+        mCachedVertexAttribTypesValidation = {{
+            {VertexAttribType::Byte, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Short, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedByte, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedShort, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Float, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Fixed, VertexAttribTypeCase::Valid},
+            {VertexAttribType::HalfFloatOES, halfFloatValidity},
+        }};
+    }
+    else
+    {
+        mCachedVertexAttribTypesValidation = {{
+            {VertexAttribType::Byte, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Short, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Int, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedByte, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedShort, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedInt, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Float, VertexAttribTypeCase::Valid},
+            {VertexAttribType::HalfFloat, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Fixed, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Int2101010, VertexAttribTypeCase::ValidSize4Only},
+            {VertexAttribType::HalfFloatOES, halfFloatValidity},
+            {VertexAttribType::UnsignedInt2101010, VertexAttribTypeCase::ValidSize4Only},
+            {VertexAttribType::Int1010102, vertexType1010102Validity},
+            {VertexAttribType::UnsignedInt1010102, vertexType1010102Validity},
+        }};
+
+        mCachedIntegerVertexAttribTypesValidation = {{
+            {VertexAttribType::Byte, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Short, VertexAttribTypeCase::Valid},
+            {VertexAttribType::Int, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedByte, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedShort, VertexAttribTypeCase::Valid},
+            {VertexAttribType::UnsignedInt, VertexAttribTypeCase::Valid},
+        }};
+    }
+}
 }  // namespace gl

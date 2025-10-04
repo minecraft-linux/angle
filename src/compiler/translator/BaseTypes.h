@@ -969,6 +969,8 @@ enum TQualifier
     EvqLastFragDepth,
     EvqLastFragStencil,
 
+    EvqDepthRange,  // gl_DepthRange
+
     // GLSL ES 3.0 vertex output and fragment input
 
     // This section combines
@@ -1382,7 +1384,7 @@ struct TLayoutQualifier
 
     // EXT_shader_framebuffer_fetch layout qualifiers.
     int inputAttachmentIndex;
-    bool noncoherent;
+    bool noncoherent;  // Also used by ANGLE_shader_pixel_local_storage.
 
     // KHR_blend_equation_advanced layout qualifiers.
     AdvancedBlendEquations advancedBlendEquations;
@@ -1542,6 +1544,7 @@ inline const char *getQualifierString(TQualifier q)
     case EvqLastFragData:              return "LastFragData";
     case EvqLastFragDepth:             return "LastFragDepthARM";
     case EvqLastFragStencil:           return "LastFragStencilARM";
+    case EvqDepthRange:                return "DepthRange";
     case EvqFragmentInOut:             return "inout";
     case EvqSmoothOut:                 return "smooth out";
     case EvqCentroidOut:               return "smooth centroid out";
@@ -1576,7 +1579,7 @@ inline const char *getQualifierString(TQualifier q)
     case EvqVolatile:                  return "volatile";
     case EvqGeometryIn:                return "in";
     case EvqGeometryOut:               return "out";
-    case EvqPerVertexIn:               return "gl_in";
+    case EvqPerVertexIn:               return "in";
     case EvqPrimitiveIDIn:             return "gl_PrimitiveIDIn";
     case EvqInvocationID:              return "gl_InvocationID";
     case EvqPrimitiveID:               return "gl_PrimitiveID";

@@ -78,6 +78,7 @@ class TParseContext : angle::NonCopyable
     bool isEarlyFragmentTestsSpecified() const { return mEarlyFragmentTestsSpecified; }
     bool hasDiscard() const { return mHasDiscard; }
     bool isSampleQualifierSpecified() const { return mSampleQualifierSpecified; }
+    bool isMainDeclared() const { return mIsMainDeclared; }
 
     void setLoopNestingLevel(int loopNestintLevel) { mLoopNestingLevel = loopNestintLevel; }
 
@@ -692,6 +693,8 @@ class TParseContext : angle::NonCopyable
     bool parseTessControlShaderOutputLayoutQualifier(const TTypeQualifier &typeQualifier);
     bool parseTessEvaluationShaderInputLayoutQualifier(const TTypeQualifier &typeQualifier);
 
+    void sizeUnsizedArrayTypes(uint32_t arraySize);
+
     // Certain operations become illegal only iff the shader declares pixel local storage uniforms.
     enum class PLSIllegalOperations
     {
@@ -795,11 +798,22 @@ class TParseContext : angle::NonCopyable
     int mMaxShaderStorageBufferBindings;
     int mMaxPixelLocalStoragePlanes;
 
+    // keeps track of whether any of the built-ins that can be redeclared (see
+    // IsRedeclarableBuiltIn()) has been marked as invariant/precise before the possible
+    // redeclaration.
+    //
+    // If redeclared after being marked as invariant/precise, a compile error is generated.
+    // The GLSL spec does not explicitly call this out as invalid, but it's not a useful sequence
+    // of statements (invariant/precise could have been directly specified on the redeclaration),
+    // and there are no known users.
+    TUnorderedMap<TQualifier, bool> mBuiltInQualified;
+
     // keeps track whether we are declaring / defining a function
     bool mDeclaringFunction;
 
     // keeps track whether we are declaring / defining the function main().
     bool mDeclaringMain;
+    bool mIsMainDeclared;
 
     // Track the state of each atomic counter binding.
     std::map<int, AtomicCounterBindingState> mAtomicCounterBindingStates;

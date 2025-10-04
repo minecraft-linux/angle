@@ -342,6 +342,8 @@ TParseContext::TParseContext(TSymbolTable &symt,
       mMaxShaderStorageBufferBindings(resources.MaxShaderStorageBufferBindings),
       mMaxPixelLocalStoragePlanes(resources.MaxPixelLocalStoragePlanes),
       mDeclaringFunction(false),
+      mDeclaringMain(false),
+      mIsMainDeclared(false),
       mGeometryShaderInputPrimitiveType(EptUndefined),
       mGeometryShaderOutputPrimitiveType(EptUndefined),
       mGeometryShaderInvocations(0),
@@ -1467,6 +1469,14 @@ bool TParseContext::declareVariable(const TSourceLoc &line,
         case EvqLastFragDepth:
         case EvqLastFragStencil:
             symbolType = SymbolType::BuiltIn;
+
+            if (mBuiltInQualified[type->getQualifier()])
+            {
+                error(
+                    line,
+                    "built-ins cannot be redeclared after being qualified as invariant or precise",
+                    identifier);
+            }
             break;
         default:
             break;
@@ -1492,7 +1502,8 @@ bool TParseContext::declareVariable(const TSourceLoc &line,
 
     if (!((identifier.beginsWith("gl_LastFragData") || type->getQualifier() == EvqFragmentInOut) &&
           (isExtensionEnabled(TExtension::EXT_shader_framebuffer_fetch) ||
-           isExtensionEnabled(TExtension::EXT_shader_framebuffer_fetch_non_coherent))))
+           isExtensionEnabled(TExtension::EXT_shader_framebuffer_fetch_non_coherent))) &&
+        !(type->isPixelLocal() && isExtensionEnabled(TExtension::ANGLE_shader_pixel_local_storage)))
     {
         checkNoncoherentIsNotSpecified(line, type->getLayoutQualifier().noncoherent);
     }
@@ -2451,8 +2462,8 @@ void TParseContext::checkNoncoherentIsNotSpecified(const TSourceLoc &location, b
     if (noncoherent != false)
     {
         error(location,
-              "invalid layout qualifier: only valid when used with 'gl_LastFragData' or the "
-              "variable decorated with 'inout' in a fragment shader",
+              "invalid layout qualifier: only valid when used with 'gl_LastFragData', the "
+              "variable decorated with 'inout' in a fragment shader, or pixel local storage",
               "noncoherent");
     }
 }
@@ -3331,7 +3342,35 @@ void TParseContext::checkGeometryShaderInputAndSetArraySize(const TSourceLoc &lo
                                                             const ImmutableString &token,
                                                             TType *type)
 {
-    if (IsGeometryShaderInput(mShaderType, type->getQualifier()))
+    if (type->getQualifier() == EvqPerVertexIn)
+    {
+        // This is a redeclaration of gl_in, which may be unsized.
+        ASSERT(type->isArray());
+
+        // If the size is already determined, set the size / verify it:
+        if (mGeometryShaderInputPrimitiveType != EptUndefined)
+        {
+            ASSERT(mGeometryInputArraySize != 0);
+            if (type->getOutermostArraySize() > 0 &&
+                type->getOutermostArraySize() != mGeometryInputArraySize)
+            {
+                error(location, "gl_in array size inconsistent with primitive", "gl_in");
+            }
+            else if (type->getOutermostArraySize() == 0)
+            {
+                type->sizeOutermostUnsizedArray(mGeometryInputArraySize);
+            }
+        }
+        else
+        {
+            warning(location,
+                    "Missing a valid input primitive declaration before declaring an unsized "
+                    "gl_in array",
+                    "Deferred");
+            mDeferredArrayTypesToSize.push_back(type);
+        }
+    }
+    else if (IsGeometryShaderInput(mShaderType, type->getQualifier()))
     {
         if (type->isArray() && type->getOutermostArraySize() == 0u)
         {
@@ -3735,6 +3774,8 @@ TIntermGlobalQualifierDeclaration *TParseContext::parseGlobalQualifierDeclaratio
     TIntermSymbol *intermSymbol = new TIntermSymbol(variable);
     intermSymbol->setLine(identifierLoc);
 
+    mBuiltInQualified[type.getQualifier()] = true;
+
     return new TIntermGlobalQualifierDeclaration(intermSymbol, typeQualifier.precise,
                                                  identifierLoc);
 }
@@ -3958,7 +3999,7 @@ bool TParseContext::checkPrimitiveTypeMatchesTypeQualifier(const TTypeQualifier 
 void TParseContext::setGeometryShaderInputArraySize(unsigned int inputArraySize,
                                                     const TSourceLoc &line)
 {
-    if (!symbolTable.setGlInArraySize(inputArraySize))
+    if (!symbolTable.setGlInArraySize(inputArraySize, getShaderVersion()))
     {
         error(line,
               "Array size or input primitive declaration doesn't match the size of earlier sized "
@@ -4005,12 +4046,8 @@ bool TParseContext::parseGeometryShaderInputLayoutQualifier(const TTypeQualifier
         }
 
         // Size any implicitly sized arrays that have already been declared.
-        for (TType *type : mDeferredArrayTypesToSize)
-        {
-            type->sizeOutermostUnsizedArray(
-                symbolTable.getGlInVariableWithArraySize()->getType().getOutermostArraySize());
-        }
-        mDeferredArrayTypesToSize.clear();
+        sizeUnsizedArrayTypes(
+            symbolTable.getGlInVariableWithArraySize()->getType().getOutermostArraySize());
     }
 
     // Set mGeometryInvocations if exists
@@ -4101,11 +4138,7 @@ bool TParseContext::parseTessControlShaderOutputLayoutQualifier(const TTypeQuali
         mTessControlShaderOutputVertices = layoutQualifier.vertices;
 
         // Size any implicitly sized arrays that have already been declared.
-        for (TType *type : mDeferredArrayTypesToSize)
-        {
-            type->sizeOutermostUnsizedArray(mTessControlShaderOutputVertices);
-        }
-        mDeferredArrayTypesToSize.clear();
+        sizeUnsizedArrayTypes(mTessControlShaderOutputVertices);
     }
     else
     {
@@ -4171,6 +4204,35 @@ bool TParseContext::parseTessEvaluationShaderInputLayoutQualifier(
     }
 
     return true;
+}
+
+void TParseContext::sizeUnsizedArrayTypes(uint32_t arraySize)
+{
+    for (TType *type : mDeferredArrayTypesToSize)
+    {
+        type->sizeOutermostUnsizedArray(arraySize);
+    }
+    mDeferredArrayTypesToSize.clear();
+
+    // The gl_in variable may have been redeclared before it is sized.  Make sure it's declaration
+    // is in sync with SymbolTable::mGlInVariableWithArraySize.
+    if (mTreeRoot)
+    {
+        for (TIntermNode *node : *mTreeRoot->getSequence())
+        {
+            TIntermDeclaration *decl = node->getAsDeclarationNode();
+            TIntermSymbol *symbol    = decl && decl->getChildCount() == 1
+                                           ? decl->getChildNode(0)->getAsSymbolNode()
+                                           : nullptr;
+            if (symbol != nullptr && symbol->getQualifier() == EvqPerVertexIn)
+            {
+                ASSERT(symbolTable.getGlInVariableWithArraySize() != nullptr);
+                decl->replaceChildNode(
+                    symbol, new TIntermSymbol(symbolTable.getGlInVariableWithArraySize()));
+                break;
+            }
+        }
+    }
 }
 
 void TParseContext::parseGlobalLayoutQualifier(const TTypeQualifierBuilder &typeQualifierBuilder)
@@ -4536,6 +4598,11 @@ TIntermFunctionDefinition *TParseContext::addFunctionDefinition(
     TIntermFunctionDefinition *functionNode =
         new TIntermFunctionDefinition(functionPrototype, functionBody);
     functionNode->setLine(location);
+
+    if (mDeclaringMain)
+    {
+        mIsMainDeclared = true;
+    }
 
     symbolTable.pop();
     return functionNode;
@@ -5263,7 +5330,7 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
     // instance name.
     TVariable *instanceVariable =
         new TVariable(&symbolTable, instanceName, interfaceBlockType,
-                      instanceName.empty() ? SymbolType::Empty : SymbolType::UserDefined);
+                      instanceName.empty() ? SymbolType::Empty : instanceSymbolType);
 
     if (instanceVariable->symbolType() == SymbolType::Empty)
     {
@@ -5302,7 +5369,15 @@ TIntermDeclaration *TParseContext::addInterfaceBlock(
     }
     else
     {
-        checkIsNotReserved(instanceLine, instanceName);
+        // gl_in is allowed to be redeclared
+        if (interfaceBlockType->getQualifier() != EvqPerVertexIn)
+        {
+            checkIsNotReserved(instanceLine, instanceName);
+        }
+        else
+        {
+            symbolTable.onGlInVariableRedeclaration(instanceVariable);
+        }
 
         // add a symbol for this interface block
         if (!symbolTable.declare(instanceVariable))
@@ -5956,10 +6031,10 @@ TLayoutQualifier TParseContext::parseLayoutQualifier(const ImmutableString &qual
         if (qualifierType == "noncoherent")
         {
             if (checkCanUseOneOfExtensions(
-                    qualifierTypeLine,
-                    std::array<TExtension, 2u>{
-                        {TExtension::EXT_shader_framebuffer_fetch,
-                         TExtension::EXT_shader_framebuffer_fetch_non_coherent}}))
+                    qualifierTypeLine, std::array<TExtension, 3u>{
+                                           {TExtension::EXT_shader_framebuffer_fetch,
+                                            TExtension::EXT_shader_framebuffer_fetch_non_coherent,
+                                            TExtension::ANGLE_shader_pixel_local_storage}}))
             {
                 checkLayoutQualifierSupported(qualifierTypeLine, qualifierType, 100);
                 qualifier.noncoherent = true;
