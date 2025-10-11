@@ -19,6 +19,5 @@ jobs:
       run: |
         git remote add upstream https://github.com/google/angle.git
         git fetch upstream main
-        
         git merge upstream/main -m "Merge remote-tracking branch 'upstream/main' into metal-freeze"
         git push
