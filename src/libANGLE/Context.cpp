@@ -3566,7 +3566,7 @@ void Context::initVersionStrings()
     else
     {
         versionString << "OpenGL ES ";
-        versionString << clientVersion.getMajor() << "." << clientVersion.getMinor() << ".0 (ANGLE "
+        versionString << clientVersion.getMajor() << "." << clientVersion.getMinor() << " (ANGLE "
                       << angle::GetANGLEVersionString() << ")";
     }
 
@@ -4104,12 +4104,14 @@ Extensions Context::generateSupportedExtensions() const
     // Blob cache extension is provided by the ANGLE frontend
     supportedExtensions.blobCacheANGLE = true;
 
-    // Disable extensions that are implemented through shader compiler transformations
+    // Disable extensions that are implemented through shader compiler transformations or require
+    // shader translator reflection data
     if (mState.usesPassthroughShaders())
     {
         supportedExtensions.multiDrawANGLE                       = false;
         supportedExtensions.shaderPixelLocalStorageANGLE         = false;
         supportedExtensions.shaderPixelLocalStorageCoherentANGLE = false;
+        supportedExtensions.blendFuncExtendedEXT                 = false;
         if (frontendFeatures.clipCullDistanceBrokenWithPassthroughShaders.enabled)
         {
             supportedExtensions.clipCullDistanceEXT = false;
