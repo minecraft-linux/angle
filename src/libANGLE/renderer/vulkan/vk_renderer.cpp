@@ -475,7 +475,26 @@ constexpr vk::SkippedSyncvalMessage kSkippedSyncvalMessages[] = {
       "VK_PIPELINE_STAGE_2_COLOR_ATTACHMENT_OUTPUT_BIT(VK_ACCESS_2_COLOR_ATTACHMENT_WRITE_BIT)",
       "prior_access = VK_PIPELINE_STAGE_2_BLIT_BIT(VK_ACCESS_2_TRANSFER_READ_BIT)",
       "command = vkCmdDraw", "prior_command = vkCmdBlitImage"}},
-};
+    // https://anglebug.com/456785955
+    {"SYNC-HAZARD-WRITE-AFTER-WRITE",
+     false,
+     {"message_type = RenderPassLoadOpError", "hazard_type = WRITE_AFTER_WRITE",
+      "access = "
+      "VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_"
+      "BIT)",
+      "prior_access = "
+      "VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)",
+      "command = vkCmdBeginRenderPass", "prior_command = vkCmdEndRenderPass",
+      "load_op = VK_ATTACHMENT_LOAD_OP_DONT_CARE"}},
+    {"SYNC-HAZARD-READ-AFTER-WRITE",
+     false,
+     {"message_type = RenderPassLoadOpError", "hazard_type = READ_AFTER_WRITE",
+      "access = "
+      "VK_PIPELINE_STAGE_2_EARLY_FRAGMENT_TESTS_BIT(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_READ_BIT)",
+      "prior_access = "
+      "VK_PIPELINE_STAGE_2_LATE_FRAGMENT_TESTS_BIT(VK_ACCESS_2_DEPTH_STENCIL_ATTACHMENT_WRITE_BIT)",
+      "command = vkCmdBeginRenderPass", "prior_command = vkCmdEndRenderPass",
+      "load_op = VK_ATTACHMENT_LOAD_OP_LOAD"}}};
 
 // Messages that should not be generated if the feature to force-enable providing the size pointer
 // to vkCmdBindVertexBuffers2() is disabled.
@@ -647,7 +666,7 @@ bool SyncvalMessageMatchesSkip(const char *messageId,
                                const char *message,
                                const vk::SkippedSyncvalMessage &skip)
 {
-    // TODO(http://angleproject:391284743): Ongoing transition: textual matches -> extraProperties.
+    // TODO(http://anglebug.com/391284743): Ongoing transition: textual matches -> extraProperties.
     // The skip should include at least one extraProperty
     ASSERT(skip.extraProperties[0]);
 
@@ -5178,6 +5197,11 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
         driverVersion =
             angle::ParseSamsungVulkanDriverVersion(mPhysicalDeviceProperties.driverVersion);
     }
+    else if (isPowerVR)
+    {
+        driverVersion =
+            angle::ParseImaginationVulkanDriverVersion(mPhysicalDeviceProperties.driverVersion);
+    }
 
     // Classify devices based on general architecture:
     //
@@ -5471,6 +5495,10 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
 
     ANGLE_FEATURE_CONDITION(&mFeatures, supportsMultiview, mMultiviewFeatures.multiview == VK_TRUE);
 
+    ANGLE_FEATURE_CONDITION(&mFeatures, supportsMultiviewMultisampleRenderToTexture,
+                            mFeatures.supportsMultisampledRenderToSingleSampled.enabled &&
+                                mFeatures.supportsMultiview.enabled);
+
     // VK_EXT_device_fault can provide more information when the device is lost.
     ANGLE_FEATURE_CONDITION(
         &mFeatures, supportsDeviceFault,
@@ -5503,14 +5531,15 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
                             (isNvidia && nativeWindowSystem == angle::NativeWindowSystem::X11));
 
     ANGLE_FEATURE_CONDITION(&mFeatures, padBuffersToMaxVertexAttribStride, isAMD || isSamsung);
-    mMaxVertexAttribStride = std::min(static_cast<uint32_t>(gl::limits::kMaxVertexAttribStride),
-                                      mPhysicalDeviceProperties.limits.maxVertexInputBindingStride);
+    mMaxVertexAttribStride =
+        mFeatures.padBuffersToMaxVertexAttribStride.enabled
+            ? std::min(static_cast<uint32_t>(gl::limits::kMaxVertexAttribStride),
+                       mPhysicalDeviceProperties.limits.maxVertexInputBindingStride)
+            : 0;
 
     // The limits related to buffer size should also take the max memory allocation size and padding
     // (if applicable) into account.
-    mMaxBufferMemorySizeLimit = getFeatures().padBuffersToMaxVertexAttribStride.enabled
-                                    ? getMaxMemoryAllocationSize() - mMaxVertexAttribStride
-                                    : getMaxMemoryAllocationSize();
+    mMaxBufferMemorySizeLimit = getMaxMemoryAllocationSize() - mMaxVertexAttribStride;
 
     ANGLE_FEATURE_CONDITION(&mFeatures, forceD16TexFilter, IsAndroid() && isQualcommProprietary);
 
@@ -5699,12 +5728,9 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
     // or extensions. For the purpose of testing coverage, we would still enable ES 3.2 on these
     // platforms. However, once a listed test platform is updated to a version that does support
     // ES 3.2, it should be unlisted.
-    ANGLE_FEATURE_CONDITION(
-        &mFeatures, exposeES32ForTesting,
-        mFeatures.exposeNonConformantExtensionsAndVersions.enabled &&
-            (isSoftwareRenderer || isPixel4 ||
-             (IsLinux() && isNvidia && driverVersion < angle::VersionTriple(441, 0, 0)) ||
-             (IsWindows() && isIntel)));
+    ANGLE_FEATURE_CONDITION(&mFeatures, exposeES32ForTesting,
+                            mFeatures.exposeNonConformantExtensionsAndVersions.enabled &&
+                                (isSoftwareRenderer || isPixel4 || (IsWindows() && isIntel)));
 
     ANGLE_FEATURE_CONDITION(
         &mFeatures, supportsMemoryBudget,
@@ -6260,6 +6286,8 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
     ANGLE_FEATURE_CONDITION(&mFeatures, supportsHostImageCopy,
                             mHostImageCopyFeatures.hostImageCopy == VK_TRUE &&
                                 mHostImageCopyProperties.identicalMemoryTypeRequirements);
+    // Software renderers always benefit from host-image-copy, because that's just memcpy.
+    ANGLE_FEATURE_CONDITION(&mFeatures, allowHostImageCopyAfterInitialUpload, isSoftwareRenderer);
 
     // 1) host vk driver does not natively support ETC format.
     // 2) host vk driver supports BC format.
@@ -6422,7 +6450,7 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
     // Use of dynamic rendering is disabled on older Qualcomm drivers due to driver bugs
     // (http://crbug.com/415738891).
     //
-    // Use of dynamic rendering on PowerVR devices is disabled for performance reasons
+    // Use of dynamic rendering is disabled on older PowerVR devices for performance reasons
     // (http://issuetracker.google.com/372273294).
     const bool hasLegacyDitheringV1 =
         mFeatures.supportsLegacyDithering.enabled &&
@@ -6437,7 +6465,7 @@ void Renderer::initFeatures(const vk::ExtensionNameList &deviceExtensionNames,
             !emulatesMultisampledRenderToTexture &&
             !(isARMProprietary && driverVersion < angle::VersionTriple(52, 0, 0)) &&
             !(isQualcommProprietary && driverVersion < angle::VersionTriple(512, 801, 0)) &&
-            !isPowerVR);
+            !(isPowerVR && driverVersion < angle::VersionTriple(1, 634, 0)));
 
     // On tile-based renderers, breaking the render pass is costly.  Changing into and out of
     // framebuffer fetch causes the render pass to break so that the layout of the color attachments
@@ -7149,6 +7177,13 @@ uint64_t Renderer::getMaxFenceWaitTimeNs() const
     return kMaxFenceWaitTimeNs;
 }
 
+VkDeviceSize Renderer::padVertexAttribBufferSizeIfNeeded(VkDeviceSize bufferSize)
+{
+    // When the padding feature is disabled, the max attribute stride should remain 0.
+    ASSERT(mFeatures.padBuffersToMaxVertexAttribStride.enabled ^ (mMaxVertexAttribStride == 0));
+    return bufferSize + mMaxVertexAttribStride;
+}
+
 void Renderer::setGlobalDebugAnnotator(bool *installedAnnotatorOut)
 {
     // Install one of two DebugAnnotator classes:
@@ -7279,7 +7314,7 @@ angle::Result Renderer::submitPriorityDependency(vk::ErrorContext *context,
                                                  SerialIndex index)
 {
     RendererScoped<vk::ReleasableResource<vk::Semaphore>> semaphore(this);
-    ANGLE_VK_TRY(context, semaphore.get().get().init(mDevice));
+    ANGLE_VK_TRY(context, semaphore.get().get().init(mDevice, VK_SEMAPHORE_TYPE_BINARY));
 
     // First, submit already flushed commands / wait semaphores into the source Priority VkQueue.
     // Commands that are in the Secondary Command Buffers will be flushed into the new VkQueue.

@@ -1608,19 +1608,6 @@ void TracePerfTest::drawBenchmark()
             buffer = 0;  // gles1: a single frame is rendered to buffer 0
         }
         bindFramebuffer(GL_FRAMEBUFFER, buffer);
-
-        GLsync sync = mOffscreenSyncs[offscreenBufferIndex];
-        if (sync)
-        {
-            constexpr GLuint64 kTimeout = 2'000'000'000;  // 2 seconds
-            GLenum result = glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, kTimeout);
-            if (result != GL_CONDITION_SATISFIED && result != GL_ALREADY_SIGNALED)
-            {
-                failTest(std::string("glClientWaitSync unexpected result: ") +
-                         std::to_string(result));
-            }
-            glDeleteSync(sync);
-        }
     }
 
     char frameName[32];
@@ -1629,10 +1616,21 @@ void TracePerfTest::drawBenchmark()
 
     startGpuTimer();
     atraceCounter("TraceFrameIndex", mCurrentFrame);
+
+    const double beginReplayFrameTimeSec = mTrialTimer.getElapsedWallClockTime();
     mTraceReplay->replayFrame(mCurrentFrame);
-    stopGpuTimer();
+    mFrameWallTimeSec += mTrialTimer.getElapsedWallClockTime() - beginReplayFrameTimeSec;
+
+    if (!gAddSwapIntoGPUTime)
+    {
+        stopGpuTimer();
+    }
 
     updatePerfCounters();
+
+    // Need to exclude potentially expensive calls above from the Frame Time.
+    const double beginSwapTimeSec =
+        gAddSwapIntoFrameWallTime ? mTrialTimer.getElapsedWallClockTime() : 0.0;
 
     if (mParams->surfaceType == SurfaceType::Offscreen)
     {
@@ -1704,7 +1702,6 @@ void TracePerfTest::drawBenchmark()
                     saveScreenshotIfEnabled(ScreenshotType::kGrid);
                 }
                 getGLWindow()->swap();
-                glClear(GL_COLOR_BUFFER_BIT);
                 mOffscreenFrameCount = 0;
             }
             else
@@ -1728,6 +1725,20 @@ void TracePerfTest::drawBenchmark()
                 bindFramebuffer(GL_READ_FRAMEBUFFER, currentReadFBO);
             }
 
+            // Wait for the next frame here to simulate the behaviour of the swap buffers call
+            GLsync sync = mOffscreenSyncs[(offscreenBufferIndex + 1) % mMaxOffscreenBufferCount];
+            if (sync)
+            {
+                constexpr GLuint64 kTimeout = 2'000'000'000;  // 2 seconds
+                GLenum result = glClientWaitSync(sync, GL_SYNC_FLUSH_COMMANDS_BIT, kTimeout);
+                if (result != GL_CONDITION_SATISFIED && result != GL_ALREADY_SIGNALED)
+                {
+                    failTest(std::string("glClientWaitSync unexpected result: ") +
+                             std::to_string(result));
+                }
+                glDeleteSync(sync);
+            }
+
             if (currentEglContext != mEglContext)
             {
                 eglMakeCurrent(eglGetCurrentDisplay(), eglGetCurrentSurface(EGL_DRAW),
@@ -1742,6 +1753,22 @@ void TracePerfTest::drawBenchmark()
         getGLWindow()->swap();
     }
 
+    if (gAddSwapIntoFrameWallTime)
+    {
+        const double endSwapTimeSec = mTrialTimer.getElapsedWallClockTime();
+        mFrameWallTimeSec += endSwapTimeSec - beginSwapTimeSec;
+    }
+
+    if (gAddSwapIntoGPUTime)
+    {
+        // No need flush here since swap already performs it implicitly and we already call flush
+        // in case of the offscreen test.
+        stopGpuTimer(false);
+        // Need this flush to submit the timestamp query to the GPU right now, instead of delaying
+        // it until some time later in the next frame.
+        glFlush();
+    }
+
     endInternalTraceEvent(frameName);
 
     mTotalFrameCount++;
@@ -1750,6 +1777,8 @@ void TracePerfTest::drawBenchmark()
     {
         mTraceReplay->resetReplay();
         mCurrentFrame = mStartFrame;
+        // Flush to avoid gpu_time tracking issues on some platforms (Native GLES Qualcomm).
+        glFlush();
     }
     else
     {

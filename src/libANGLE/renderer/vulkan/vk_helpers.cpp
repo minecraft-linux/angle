@@ -4318,7 +4318,7 @@ void QueryHelper::endRenderPassQuery(ContextVk *contextVk)
 
 angle::Result QueryHelper::flushAndWriteTimestamp(ContextVk *contextVk)
 {
-    if (contextVk->hasActiveRenderPass())
+    if (contextVk->hasStartedRenderPass())
     {
         ANGLE_TRY(
             contextVk->flushCommandsAndEndRenderPass(RenderPassClosureReason::TimestampQuery));
@@ -4573,14 +4573,9 @@ angle::Result BufferHelper::init(ErrorContext *context,
     VkBufferCreateInfo modifiedCreateInfo;
     const VkBufferCreateInfo *createInfo = &requestedCreateInfo;
 
-    if (renderer->getFeatures().padBuffersToMaxVertexAttribStride.enabled)
-    {
-        const VkDeviceSize maxVertexAttribStride = renderer->getMaxVertexAttribStride();
-        ASSERT(maxVertexAttribStride);
-        modifiedCreateInfo = requestedCreateInfo;
-        modifiedCreateInfo.size += maxVertexAttribStride;
-        createInfo = &modifiedCreateInfo;
-    }
+    modifiedCreateInfo      = requestedCreateInfo;
+    modifiedCreateInfo.size = renderer->padVertexAttribBufferSizeIfNeeded(requestedCreateInfo.size);
+    createInfo              = &modifiedCreateInfo;
 
     VkMemoryPropertyFlags requiredFlags =
         (memoryPropertyFlags & VK_MEMORY_PROPERTY_HOST_VISIBLE_BIT);
@@ -4771,13 +4766,7 @@ VkResult BufferHelper::initSuballocation(Context *context,
     // initSuballocation again.
     initializeBarrierTracker(context);
 
-    if (renderer->getFeatures().padBuffersToMaxVertexAttribStride.enabled)
-    {
-        const VkDeviceSize maxVertexAttribStride = renderer->getMaxVertexAttribStride();
-        ASSERT(maxVertexAttribStride);
-        size += maxVertexAttribStride;
-    }
-
+    size = static_cast<size_t>(renderer->padVertexAttribBufferSizeIfNeeded(size));
     VK_RESULT_TRY(pool->allocateBuffer(context, size, alignment, &mSuballocation));
 
     context->getPerfCounters().bufferSuballocationCalls++;
@@ -8520,11 +8509,23 @@ angle::Result ImageHelper::updateSubresourceOnHost(ContextVk *contextVk,
         ANGLE_VK_TRY(contextVk, vkTransitionImageLayoutEXT(renderer->getDevice(), 1, &transition));
         mCurrentAccess = ImageAccess::HostCopy;
     }
-    else if (mCurrentAccess != ImageAccess::HostCopy &&
-             !IsAnyLayout(getCurrentLayout(renderer), hostImageCopyProperties.pCopyDstLayouts,
-                          hostImageCopyProperties.copyDstLayoutCount))
+    else if (mCurrentAccess == ImageAccess::HostCopy)
     {
-        return angle::Result::Continue;
+        // If last access to the image was a host-copy, continue to copy to it on the host; this
+        // frequently happens because uploads to mips or layers can be done by separate calls.
+    }
+    else
+    {
+        // If host-copy is disallowed post-initialization, or if the layout is not supported for
+        // host-copy, fall back to the buffer-copy path.
+        const bool canHostCopyAfterGpuUse =
+            renderer->getFeatures().allowHostImageCopyAfterInitialUpload.enabled &&
+            IsAnyLayout(getCurrentLayout(renderer), hostImageCopyProperties.pCopyDstLayouts,
+                        hostImageCopyProperties.copyDstLayoutCount);
+        if (!canHostCopyAfterGpuUse)
+        {
+            return angle::Result::Continue;
+        }
     }
 
     onWrite(updateLevelGL, 1, baseArrayLayer, layerCount, aspectMask);

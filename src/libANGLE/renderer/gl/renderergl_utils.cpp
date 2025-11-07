@@ -2707,6 +2707,10 @@ void InitializeFeatures(const FunctionsGL *functions, angle::FeaturesGL *feature
     // number of samples in currently bound FBO and require to reset sample
     // coverage each time FBO changes.
     ANGLE_FEATURE_CONDITION(features, resetSampleCoverageOnFBOChange, isQualcomm);
+
+    // Mali 400 series drivers fail linking shaders when passthrough shaders are enabled. Likely due
+    // to not querying correct information from varyings and uniforms.
+    ANGLE_FEATURE_CONDITION(features, disablePassthroughShaders, IsAdreno4xx(functions));
 }
 
 void InitializeFrontendFeatures(const FunctionsGL *functions, angle::FrontendFeatures *features)
@@ -2717,8 +2721,10 @@ void InitializeFrontendFeatures(const FunctionsGL *functions, angle::FrontendFea
     std::array<int, 3> mesaVersion = {0, 0, 0};
     bool isMesa                    = IsMesa(functions, &mesaVersion);
 
+    // Program binaries don't contain transform feedback varyings on multiple vendors' GPUs.
+    // https://crbug.com/442879525 for the latest example on Imagination / PowerVR.
     ANGLE_FEATURE_CONDITION(features, disableProgramCachingForTransformFeedback,
-                            !isMesa && isQualcomm);
+                            (!isMesa && isQualcomm) || IsPowerVR(vendor));
     // https://crbug.com/480992
     // Disable shader program cache to workaround PowerVR Rogue issues.
     ANGLE_FEATURE_CONDITION(features, disableProgramBinary, IsPowerVrRogue(functions));
