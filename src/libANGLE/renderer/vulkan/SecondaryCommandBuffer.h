@@ -110,6 +110,7 @@ enum class CommandID : uint16_t
     SetLineWidth,
     SetLogicOp,
     SetPrimitiveRestartEnable,
+    SetPrimitiveTopology,
     SetRasterizerDiscardEnable,
     SetScissor,
     SetStencilCompareMask,
@@ -716,6 +717,14 @@ struct SetPrimitiveRestartEnableParams
 };
 VERIFY_8_BYTE_ALIGNMENT(SetPrimitiveRestartEnableParams)
 
+struct SetPrimitiveTopologyParams
+{
+    CommandHeader header;
+
+    VkPrimitiveTopology primitiveTopology;
+};
+VERIFY_8_BYTE_ALIGNMENT(SetPrimitiveTopologyParams)
+
 struct SetRasterizerDiscardEnableParams
 {
     CommandHeader header;
@@ -1105,6 +1114,7 @@ class SecondaryCommandBuffer final : angle::NonCopyable
     void setLineWidth(float lineWidth);
     void setLogicOp(VkLogicOp logicOp);
     void setPrimitiveRestartEnable(VkBool32 primitiveRestartEnable);
+    void setPrimitiveTopology(VkPrimitiveTopology primitiveTopology);
     void setRasterizerDiscardEnable(VkBool32 rasterizerDiscardEnable);
     void setScissor(uint32_t firstScissor, uint32_t scissorCount, const VkRect2D *scissors);
     void setStencilCompareMask(uint32_t compareFrontMask, uint32_t compareBackMask);
@@ -2228,6 +2238,14 @@ ANGLE_INLINE void SecondaryCommandBuffer::setPrimitiveRestartEnable(VkBool32 pri
     paramStruct->primitiveRestartEnable = primitiveRestartEnable;
 }
 
+ANGLE_INLINE void SecondaryCommandBuffer::setPrimitiveTopology(
+    VkPrimitiveTopology primitiveTopology)
+{
+    SetPrimitiveTopologyParams *paramStruct =
+        initCommand<SetPrimitiveTopologyParams>(CommandID::SetPrimitiveTopology);
+    paramStruct->primitiveTopology = primitiveTopology;
+}
+
 ANGLE_INLINE void SecondaryCommandBuffer::setRasterizerDiscardEnable(
     VkBool32 rasterizerDiscardEnable)
 {
@@ -2382,7 +2400,7 @@ ANGLE_INLINE void SecondaryCommandBuffer::writeTimestamp(VkPipelineStageFlagBits
                                                          const QueryPool &queryPool,
                                                          uint32_t query)
 {
-    ASSERT(pipelineStage == VK_PIPELINE_STAGE_BOTTOM_OF_PIPE_BIT);
+    ASSERT(pipelineStage == VK_PIPELINE_STAGE_ALL_COMMANDS_BIT);
 
     WriteTimestampParams *paramStruct =
         initCommand<WriteTimestampParams>(CommandID::WriteTimestamp);
@@ -2394,7 +2412,7 @@ ANGLE_INLINE void SecondaryCommandBuffer::writeTimestamp2(VkPipelineStageFlagBit
                                                           const QueryPool &queryPool,
                                                           uint32_t query)
 {
-    ASSERT(pipelineStage == VK_PIPELINE_STAGE_2_BOTTOM_OF_PIPE_BIT);
+    ASSERT(pipelineStage == VK_PIPELINE_STAGE_2_ALL_COMMANDS_BIT);
 
     WriteTimestampParams *paramStruct =
         initCommand<WriteTimestampParams>(CommandID::WriteTimestamp2);

@@ -1131,6 +1131,9 @@ angle::Result TextureMtl::createViewFromBaseToMaxLevel()
     uint32_t maxLevel =
         std::min(mNativeTextureStorage->getMaxSupportedGLLevel(), mState.getEffectiveMaxLevel());
 
+    // In edge case where base level > max level, clamp up to base level.
+    maxLevel = std::max(maxLevel, mState.getEffectiveBaseLevel());
+
     mtl::TextureRef nativeViewFromBaseToMaxLevelRef;
     if (maxLevel == mNativeTextureStorage->getMaxSupportedGLLevel() &&
         mState.getEffectiveBaseLevel() == mNativeTextureStorage->getBaseGLLevel())
@@ -1175,11 +1178,16 @@ angle::Result TextureMtl::onBaseMaxLevelsChanged(const gl::Context *context)
         return angle::Result::Continue;
     }
 
+    // Account for clamping in createViewFromBaseToMaxLevel() to avoid redundant storage
+    // re-creation when max < base (e.g., base=7 with max toggling 1->2->3 should not re-create).
+    GLuint effectiveMaxForStorage =
+        std::max(mState.getMipmapMaxLevel(), mState.getEffectiveBaseLevel());
+
     if (mState.getEffectiveBaseLevel() == mNativeTextureStorage->getBaseGLLevel() &&
-        mState.getMipmapMaxLevel() == mNativeTextureStorage->getMaxSupportedGLLevel())
+        effectiveMaxForStorage == mNativeTextureStorage->getMaxSupportedGLLevel())
     {
         ASSERT(mState.getBaseLevelDesc().size == mNativeTextureStorage->sizeAt0());
-        // If level range remain the same, don't recreate the texture storage.
+        // If effective level range remains the same, don't recreate the texture storage.
         // This might feel unnecessary at first since the front-end might prevent redundant base/max
         // level change already. However, there are cases that cause native storage to be created
         // before base/max level dirty bit is passed to Metal backend and lead to unwanted problems.
@@ -2339,9 +2347,9 @@ angle::Result TextureMtl::setPerSliceSubImage(const gl::Context *context,
             {
                 // Current command buffer implementation does not support 64-bit offsets.
                 ANGLE_CHECK_GL_MATH(contextMtl, offset <= std::numeric_limits<uint32_t>::max());
+                size_t imageSize = pixelsRowPitch * mtlArea.size.height;
                 mtl::BufferRef stagingBuffer;
-                ANGLE_TRY(
-                    mtl::Buffer::MakeBuffer(contextMtl, pixelsDepthPitch, nullptr, &stagingBuffer));
+                ANGLE_TRY(mtl::Buffer::MakeBuffer(contextMtl, imageSize, nullptr, &stagingBuffer));
 
                 ASSERT(pixelsAngleFormat.pixelBytes == 4 && offset % 4 == 0);
                 ANGLE_TRY(SaturateDepth(contextMtl, sourceBuffer, stagingBuffer,
@@ -2352,11 +2360,13 @@ angle::Result TextureMtl::setPerSliceSubImage(const gl::Context *context,
                 offset       = 0;
             }
 
+            size_t srcBytesPerImage = mtlArea.size.depth > 1 ? pixelsDepthPitch : 0;
+
             // Use blit encoder to copy
             mtl::BlitCommandEncoder *blitEncoder = GetBlitCommandEncoderForResources(
                 contextMtl, {sourceBuffer.get(), imageDef.image.get()});
             CopyBufferToOriginalTextureIfDstIsAView(
-                contextMtl, blitEncoder, sourceBuffer, offset, pixelsRowPitch, pixelsDepthPitch,
+                contextMtl, blitEncoder, sourceBuffer, offset, pixelsRowPitch, srcBytesPerImage,
                 mtlArea.size, imageDef.image, slice, mtl::kZeroNativeMipLevel, mtlArea.origin,
                 imageFormat.isPVRTC() ? MTLBlitOptionRowLinearPVRTC : MTLBlitOptionNone);
         }

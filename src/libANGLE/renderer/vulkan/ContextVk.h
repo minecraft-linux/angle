@@ -397,14 +397,14 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     // Sets effective Context Priority. Changed by ShareGroupVk.
     void setPriority(egl::ContextPriority newPriority)
     {
-        mContextPriority  = newPriority;
-        mDeviceQueueIndex = mRenderer->getDeviceQueueIndex(mContextPriority);
+        mCommandState.setPriority(newPriority);
+        mDeviceQueueIndex = mRenderer->getDeviceQueueIndex(newPriority);
     }
 
     VkDevice getDevice() const;
     // Effective Context Priority
-    egl::ContextPriority getPriority() const { return mContextPriority; }
-    vk::ProtectionType getProtectionType() const { return mProtectionType; }
+    egl::ContextPriority getPriority() const { return mCommandState.getPriority(); }
+    vk::ProtectionType getProtectionType() const { return mCommandState.getProtectionType(); }
 
     ANGLE_INLINE const angle::FeaturesVk &getFeatures() const { return mRenderer->getFeatures(); }
 
@@ -479,7 +479,10 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
 
     angle::Result finishImpl(RenderPassClosureReason renderPassClosureReason);
 
-    void addWaitSemaphore(VkSemaphore semaphore, VkPipelineStageFlags stageMask);
+    void addWaitSemaphore(VkSemaphore semaphore, VkPipelineStageFlags stageMask)
+    {
+        mCommandState.addWaitSemaphore(semaphore, stageMask);
+    }
 
     template <typename T>
     void addGarbage(T *object)
@@ -623,7 +626,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     angle::Result submitStagedTextureUpdates()
     {
         // Staged updates are recorded in outside RP command buffer, submit them.
-        return flushOutsideRenderPassCommands();
+        return flushAndSubmitOutsideRenderPassCommands();
     }
 
     angle::Result beginNewRenderPass(vk::RenderPassFramebuffer &&framebuffer,
@@ -793,6 +796,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
         return mIsInColorFramebufferFetchMode;
     }
 
+    const angle::PerfMonitorCounterGroupsInfo &getPerfMonitorCountersInfo() const override;
     const angle::PerfMonitorCounterGroups &getPerfMonitorCounters() override;
 
     void resetPerFramePerfCounters();
@@ -950,6 +954,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
         // - In VK_EXT_extended_dynamic_state
         DIRTY_BIT_DYNAMIC_CULL_MODE,
         DIRTY_BIT_DYNAMIC_FRONT_FACE,
+        DIRTY_BIT_DYNAMIC_PRIMITIVE_TOPOLOGY,
         DIRTY_BIT_DYNAMIC_DEPTH_TEST_ENABLE,
         DIRTY_BIT_DYNAMIC_DEPTH_WRITE_ENABLE,
         DIRTY_BIT_DYNAMIC_DEPTH_COMPARE_OP,
@@ -1035,6 +1040,8 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     static_assert(DIRTY_BIT_DYNAMIC_CULL_MODE > DIRTY_BIT_RENDER_PASS,
                   "Render pass using dirty bit must be handled after the render pass dirty bit");
     static_assert(DIRTY_BIT_DYNAMIC_FRONT_FACE > DIRTY_BIT_RENDER_PASS,
+                  "Render pass using dirty bit must be handled after the render pass dirty bit");
+    static_assert(DIRTY_BIT_DYNAMIC_PRIMITIVE_TOPOLOGY > DIRTY_BIT_RENDER_PASS,
                   "Render pass using dirty bit must be handled after the render pass dirty bit");
     static_assert(DIRTY_BIT_DYNAMIC_DEPTH_TEST_ENABLE > DIRTY_BIT_RENDER_PASS,
                   "Render pass using dirty bit must be handled after the render pass dirty bit");
@@ -1155,6 +1162,7 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
                         float nearPlane,
                         float farPlane);
     void updateFrontFace();
+    void updateTopology(gl::PrimitiveMode mode);
     void updateDepthRange(float nearPlane, float farPlane);
     void updateMissingAttachments();
     void updateSampleMaskWithRasterizationSamples(const uint32_t rasterizationSamples);
@@ -1270,6 +1278,9 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
                                                      DirtyBits dirtyBitMask);
     angle::Result handleDirtyGraphicsDynamicFrontFace(DirtyBits::Iterator *dirtyBitsIterator,
                                                       DirtyBits dirtyBitMask);
+    angle::Result handleDirtyGraphicsDynamicPrimitiveTopology(
+        DirtyBits::Iterator *dirtyBitsIterator,
+        DirtyBits dirtyBitMask);
     angle::Result handleDirtyGraphicsDynamicDepthTestEnable(DirtyBits::Iterator *dirtyBitsIterator,
                                                             DirtyBits dirtyBitMask);
     angle::Result handleDirtyGraphicsDynamicDepthWriteEnable(DirtyBits::Iterator *dirtyBitsIterator,
@@ -1590,6 +1601,8 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     // Current active transform feedback buffer queue serial. Invalid if TF not active.
     QueueSerial mCurrentTransformFeedbackQueueSerial;
 
+    egl::ContextPriority mInitialContextPriority;
+
     // The garbage list for single context use objects. The list will be GPU tracked by next
     // submission queueSerial. Note: Resource based shared object should always be added to
     // renderer's mSharedGarbageList.
@@ -1598,6 +1611,9 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     RenderPassCache mRenderPassCache;
     // Used with dynamic rendering as it doesn't use render passes.
     vk::RenderPass mNullRenderPass;
+
+    // vulkan primary command buffer
+    vk::CommandsState mCommandState;
 
     vk::OutsideRenderPassCommandBufferHelper *mOutsideRenderPassCommands;
     vk::RenderPassCommandBufferHelper *mRenderPassCommands;
@@ -1672,13 +1688,6 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     // The number of render passes since the last submission of all commands.
     VkDeviceSize mRenderPassCountSinceSubmit;
 
-    // Semaphores that must be flushed before the current commands. Flushed semaphores will be
-    // waited on in the next submission.
-    std::vector<VkSemaphore> mWaitSemaphores;
-    std::vector<VkPipelineStageFlags> mWaitSemaphoreStageMasks;
-    // Whether this context has wait semaphores (flushed and unflushed) that must be submitted.
-    bool mHasWaitSemaphoresPendingSubmission;
-
     // Hold information from the last gpu clock sync for future gpu-to-cpu timestamp conversions.
     GpuClockSyncInfo mGpuClockSync;
 
@@ -1688,13 +1697,10 @@ class ContextVk : public ContextImpl, public vk::Context, public MultisampleText
     uint64_t mGpuEventTimestampOrigin;
 
     // A mix of per-frame and per-run counters.
+    angle::PerfMonitorCounterGroupsInfo mPerfMonitorCountersInfo;
     angle::PerfMonitorCounterGroups mPerfMonitorCounters;
 
     gl::state::DirtyBits mPipelineDirtyBitsMask;
-
-    egl::ContextPriority mInitialContextPriority;
-    egl::ContextPriority mContextPriority;
-    vk::ProtectionType mProtectionType;
 
     ShareGroupVk *mShareGroupVk;
 

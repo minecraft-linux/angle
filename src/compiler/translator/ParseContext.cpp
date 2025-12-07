@@ -485,6 +485,12 @@ TParseContext::TParseContext(TSymbolTable &symt,
       mIRBuilder(gl::FromGLenum<gl::ShaderType>(type))
 {
     mDiagnostics->setIRBuilder(&mIRBuilder);
+
+    // If not using the IR, don't build it by pretending there's been an error.
+    if (!mCompileOptions.useIR)
+    {
+        mIRBuilder.onError();
+    }
 }
 
 TParseContext::~TParseContext()
@@ -699,13 +705,17 @@ void TParseContext::outOfRangeError(bool isError,
 
 void TParseContext::setTreeRoot(TIntermBlock *treeRoot)
 {
+#ifdef ANGLE_IR
     // When the IR is used, make sure the temporary tree created during parse is not used by anyone.
     // With IR, eventually this tree doesn't need to be created at all, a stack of node properties
     // to verify / propagate is sufficient during parse for validation purposes.
-#ifndef ANGLE_IR
+    if (mCompileOptions.useIR)
+    {
+        return;
+    }
+#endif
     mTreeRoot = treeRoot;
     mTreeRoot->setIsTreeRoot();
-#endif
 }
 
 //
@@ -1415,10 +1425,13 @@ unsigned int TParseContext::checkIsValidArraySize(const TSourceLoc &line, TInter
     }
 
 #ifdef ANGLE_IR
-    // Pop the array size from the IR too.  IR's evaluation should be equal to the AST constant
-    // fold; when the AST goes away, the size as evaluated by IR is going to be used.
-    const uint32_t sizeAccordingToIr = mIRBuilder.popArraySize();
-    ASSERT(mDiagnostics->numErrors() != 0 || size == sizeAccordingToIr);
+    if (mCompileOptions.useIR)
+    {
+        // Pop the array size from the IR too.  IR's evaluation should be equal to the AST constant
+        // fold; when the AST goes away, the size as evaluated by IR is going to be used.
+        const uint32_t sizeAccordingToIr = mIRBuilder.popArraySize();
+        ASSERT(mDiagnostics->numErrors() != 0 || size == sizeAccordingToIr);
+    }
 #endif
 
     if (size == 0u)
@@ -6636,29 +6649,55 @@ TIntermTyped *TParseContext::addIndexExpression(TIntermTyped *baseExpression,
         }
     }
 
+    int index                   = 0;
+    bool outOfRangeIndexIsError = false;
+
+    // If the index is using the comma operator, descend to the right-most value, see if that's a
+    // constant.  This is used for validating the index only, we can't constant fold the expression
+    // due to the left-hand-side of the comma.
+    TIntermTyped *commaRHS = indexExpression;
+    while (true)
+    {
+        TIntermConstantUnion *constant = commaRHS->getAsConstantUnion();
+        if (constant)
+        {
+            // If an out-of-range index is not qualified as constant, the behavior in the spec is
+            // undefined. This applies even if ANGLE has been able to constant fold it (ANGLE may
+            // constant fold expressions that are not constant expressions). The most compatible way
+            // to handle this case is to report a warning instead of an error and force the index to
+            // be in the correct range.
+            outOfRangeIndexIsError = commaRHS->getQualifier() == EvqConst;
+            index                  = 0;
+            if (constant->getBasicType() == EbtInt)
+            {
+                index = constant->getIConst(0);
+            }
+            else if (constant->getBasicType() == EbtUInt)
+            {
+                index = static_cast<int>(constant->getUConst(0));
+            }
+
+            if (index < 0)
+            {
+                outOfRangeError(outOfRangeIndexIsError, location, "index expression is negative",
+                                "[]");
+            }
+            break;
+        }
+
+        TIntermBinary *asBinary = commaRHS->getAsBinaryNode();
+        if (asBinary == nullptr || asBinary->getOp() != EOpComma)
+        {
+            break;
+        }
+        commaRHS = asBinary->getRight();
+    }
+
     if (indexConstantUnion)
     {
-        // If an out-of-range index is not qualified as constant, the behavior in the spec is
-        // undefined. This applies even if ANGLE has been able to constant fold it (ANGLE may
-        // constant fold expressions that are not constant expressions). The most compatible way to
-        // handle this case is to report a warning instead of an error and force the index to be in
-        // the correct range.
-        bool outOfRangeIndexIsError = indexExpression->getQualifier() == EvqConst;
-        int index                   = 0;
-        if (indexConstantUnion->getBasicType() == EbtInt)
-        {
-            index = indexConstantUnion->getIConst(0);
-        }
-        else if (indexConstantUnion->getBasicType() == EbtUInt)
-        {
-            index = static_cast<int>(indexConstantUnion->getUConst(0));
-        }
-
         int safeIndex = -1;
-
         if (index < 0)
         {
-            outOfRangeError(outOfRangeIndexIsError, location, "index expression is negative", "[]");
             safeIndex = 0;
         }
 
@@ -6722,7 +6761,8 @@ TIntermTyped *TParseContext::addIndexExpression(TIntermTyped *baseExpression,
             {
                 const uint32_t irIndex = mIRBuilder.popArraySize();
 #ifdef ANGLE_IR
-                ASSERT(mDiagnostics->numErrors() > 0 || irIndex == static_cast<uint32_t>(index));
+                ASSERT(!mCompileOptions.useIR || mDiagnostics->numErrors() > 0 ||
+                       irIndex == static_cast<uint32_t>(index));
 #endif
                 mIRBuilder.vectorComponent(irIndex);
             }
@@ -9318,7 +9358,7 @@ void TParseContext::onTernaryConditionParsed(TIntermTyped *cond, const TSourceLo
 void TParseContext::onTernaryTrueExpressionParsed(TIntermTyped *trueExpression,
                                                   const TSourceLoc &line)
 {
-    mIRBuilder.endTernaryTrueExpression();
+    mIRBuilder.endTernaryTrueExpression(trueExpression->getBasicType());
     mIRBuilder.beginTernaryFalseExpression();
 }
 
@@ -9340,7 +9380,8 @@ TIntermTyped *TParseContext::addTernarySelection(TIntermTyped *cond,
         error(loc, reasonStream.c_str(), "?:");
         return falseExpression;
     }
-    if (IsOpaqueType(trueExpression->getBasicType()))
+    const TBasicType basicType = trueExpression->getBasicType();
+    if (IsOpaqueType(basicType))
     {
         // ESSL 1.00 section 4.1.7
         // ESSL 3.00.6 section 4.1.7
@@ -9370,13 +9411,12 @@ TIntermTyped *TParseContext::addTernarySelection(TIntermTyped *cond,
         error(loc, "ternary operator is not allowed for arrays in ESSL 1.0 and webgl", "?:");
         return falseExpression;
     }
-    if ((mShaderVersion < 300 || mShaderSpec == SH_WEBGL2_SPEC) &&
-        trueExpression->getBasicType() == EbtStruct)
+    if ((mShaderVersion < 300 || mShaderSpec == SH_WEBGL2_SPEC) && basicType == EbtStruct)
     {
         error(loc, "ternary operator is not allowed for structures in ESSL 1.0 and webgl", "?:");
         return falseExpression;
     }
-    if (trueExpression->getBasicType() == EbtInterfaceBlock)
+    if (basicType == EbtInterfaceBlock)
     {
         error(loc, "ternary operator is not allowed for interface blocks", "?:");
         return falseExpression;
@@ -9384,14 +9424,14 @@ TIntermTyped *TParseContext::addTernarySelection(TIntermTyped *cond,
 
     // WebGL2 section 5.26, the following results in an error:
     // "Ternary operator applied to void, arrays, or structs containing arrays"
-    if (mShaderSpec == SH_WEBGL2_SPEC && trueExpression->getBasicType() == EbtVoid)
+    if (mShaderSpec == SH_WEBGL2_SPEC && basicType == EbtVoid)
     {
         error(loc, "ternary operator is not allowed for void", "?:");
         return falseExpression;
     }
 
-    mIRBuilder.endTernaryFalseExpression();
-    mIRBuilder.endTernary();
+    mIRBuilder.endTernaryFalseExpression(basicType);
+    mIRBuilder.endTernary(basicType);
 
     TIntermTernary *node = new TIntermTernary(cond, trueExpression, falseExpression);
     markStaticUseIfSymbol(cond);
@@ -9692,7 +9732,7 @@ bool TParseContext::postParseChecks()
 {
 #ifndef ANGLE_IR
     // If parse failed, we shouldn't reach here.
-    ASSERT(mTreeRoot != nullptr);
+    ASSERT(!mCompileOptions.useIR || mTreeRoot != nullptr);
 #endif
 
     if (mMainFunction == nullptr)
