@@ -1688,8 +1688,8 @@ angle::Result TextureVk::copySubTextureImpl(ContextVk *contextVk,
     vk::RendererScoped<vk::BufferHelper> bufferHelper(renderer);
     uint8_t *sourceData = nullptr;
     ANGLE_TRY(source->copyImageDataToBufferAndGetData(
-        contextVk, sourceLevelGL, sourceBox.depth, sourceBox,
-        RenderPassClosureReason::CopyTextureOnCPU, &bufferHelper.get(), &sourceData));
+        contextVk, sourceLevelGL, sourceBox.depth, sourceBox, QueueSubmitReason::CopyTextureOnCPU,
+        &bufferHelper.get(), &sourceData));
 
     const angle::Format &srcTextureFormat = source->getImage().getActualFormat();
     const angle::Format &dstTextureFormat =
@@ -1852,7 +1852,7 @@ angle::Result TextureVk::copySubImageImplWithTransfer(ContextVk *contextVk,
         stagingImage = std::make_unique<vk::RefCounted<vk::ImageHelper>>();
 
         ANGLE_TRY(stagingImage->get().init2DStaging(
-            contextVk, mState.hasProtectedContent(), renderer->getMemoryProperties(),
+            contextVk, mState.hasProtectedContent(),
             gl::Extents(sourceBox.width, sourceBox.height, 1), dstFormat.getIntendedFormatID(),
             dstFormat.getActualImageFormatID(getRequiredFormatSupport()),
             vk::kImageUsageTransferBits, layerCount));
@@ -1904,7 +1904,6 @@ angle::Result TextureVk::copySubImageImplWithDraw(ContextVk *contextVk,
                                                   const vk::ImageView *srcView,
                                                   SurfaceRotation srcFramebufferRotation)
 {
-    vk::Renderer *renderer = contextVk->getRenderer();
     UtilsVk &utilsVk       = contextVk->getUtils();
 
     // Potentially make adjustments for pre-rotation.
@@ -2013,7 +2012,7 @@ angle::Result TextureVk::copySubImageImplWithDraw(ContextVk *contextVk,
         stagingImage = std::make_unique<vk::RefCounted<vk::ImageHelper>>();
 
         ANGLE_TRY(stagingImage->get().init2DStaging(
-            contextVk, mState.hasProtectedContent(), renderer->getMemoryProperties(),
+            contextVk, mState.hasProtectedContent(),
             gl::Extents(sourceBox.width, sourceBox.height, 1), dstFormat.getIntendedFormatID(),
             dstFormat.getActualImageFormatID(getRequiredFormatSupport()), kDrawStagingImageFlags,
             layerCount));
@@ -2573,7 +2572,7 @@ angle::Result TextureVk::copyImageDataToBufferAndGetData(ContextVk *contextVk,
                                                          gl::LevelIndex sourceLevelGL,
                                                          uint32_t layerCount,
                                                          const gl::Box &sourceArea,
-                                                         RenderPassClosureReason reason,
+                                                         QueueSubmitReason reason,
                                                          vk::BufferHelper *copyBuffer,
                                                          uint8_t **outDataPtr)
 {
@@ -2794,7 +2793,7 @@ angle::Result TextureVk::generateMipmapsWithCPU(const gl::Context *context)
 
     vk::RendererScoped<vk::BufferHelper> bufferHelper(contextVk->getRenderer());
     ANGLE_TRY(copyImageDataToBufferAndGetData(contextVk, baseLevelGL, imageLayerCount, imageArea,
-                                              RenderPassClosureReason::GenerateMipmapOnCPU,
+                                              QueueSubmitReason::GenerateMipmapOnCPU,
                                               &bufferHelper.get(), &imageData));
 
     const angle::Format &angleFormat = mImage->getActualFormat();
@@ -2960,10 +2959,9 @@ angle::Result TextureVk::copyAndStageImageData(ContextVk *contextVk,
     const uint32_t layerCount = srcImage->getLayerCount();
 
     ANGLE_TRY(stagingImage->get().initStaging(
-        contextVk, mState.hasProtectedContent(), renderer->getMemoryProperties(),
-        srcImage->getType(), srcImage->getExtents(), srcImage->getIntendedFormatID(),
-        srcImage->getActualFormatID(), srcImage->getSamples(), vk::kImageUsageTransferBits,
-        levelCount, layerCount));
+        contextVk, mState.hasProtectedContent(), srcImage->getType(), srcImage->getExtents(),
+        srcImage->getIntendedFormatID(), srcImage->getActualFormatID(), srcImage->getSamples(),
+        vk::kImageUsageTransferBits, levelCount, layerCount));
 
     // Copy the src image wholly into the staging image
     const VkImageAspectFlags aspectFlags = srcImage->getAspectFlags();
@@ -3071,7 +3069,7 @@ angle::Result TextureVk::reinitImageAsRenderable(ContextVk *contextVk, const vk:
 
         // Explicitly finish. If new use cases arise where we don't want to block we can change
         // this.
-        ANGLE_TRY(contextVk->finishImpl(RenderPassClosureReason::TextureReformatToRenderable));
+        ANGLE_TRY(contextVk->finishImpl(QueueSubmitReason::TextureReformatToRenderable));
         // invalidate must be called after wait for finish.
         ANGLE_TRY(srcBuffer->invalidate(renderer));
 
@@ -3274,8 +3272,8 @@ angle::Result TextureVk::getAttachmentRenderTarget(const gl::Context *context,
 
             // Create the implicit multisampled image.
             ANGLE_TRY(multisampledImage.initImplicitMultisampledRenderToTexture(
-                contextVk, mState.hasProtectedContent(), renderer->getMemoryProperties(),
-                mState.getType(), samples, *mImage, extents, useRobustInit));
+                contextVk, mState.hasProtectedContent(), mState.getType(), samples, *mImage,
+                extents, useRobustInit));
         }
     }
 
@@ -3294,8 +3292,7 @@ angle::Result TextureVk::getAttachmentRenderTarget(const gl::Context *context,
 
         // Initialize implicit RGB image and image view
         ANGLE_TRY(mRgbDrawImageForYuvResolve->initRgbDrawImageForYuvResolve(
-            contextVk, renderer->getMemoryProperties(), *mImage,
-            contextVk->isRobustResourceInitEnabled()));
+            contextVk, *mImage, contextVk->isRobustResourceInitEnabled()));
         mRgbDrawImageViewsForYuvResolve->init(renderer);
     }
 
@@ -4218,8 +4215,7 @@ angle::Result TextureVk::initImage(ContextVk *contextVk,
         flags |= VK_MEMORY_PROPERTY_PROTECTED_BIT;
     }
 
-    ANGLE_TRY(contextVk->initImageAllocation(mImage, mState.hasProtectedContent(),
-                                             renderer->getMemoryProperties(), flags,
+    ANGLE_TRY(contextVk->initImageAllocation(mImage, mState.hasProtectedContent(), flags,
                                              vk::MemoryAllocationType::TextureImage));
 
     const uint32_t viewLevelCount =

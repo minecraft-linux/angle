@@ -800,8 +800,7 @@ bool TCompiler::getShaderBinary(const ShHandle compilerHandle,
 
     state.serialize(stream);
 
-    ASSERT(binaryOut);
-    *binaryOut = std::move(stream.getData());
+    *binaryOut = stream.takeData();
     return true;
 }
 
@@ -883,21 +882,21 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         return false;
     }
 
-    // Turn |inout| variables that are never read from into |out| before collecting variables and
-    // before PLS uses them.
-    if (mShaderVersion >= 300 &&
-        (IsExtensionEnabled(mExtensionBehavior, TExtension::EXT_shader_framebuffer_fetch) ||
-         IsExtensionEnabled(mExtensionBehavior,
-                            TExtension::EXT_shader_framebuffer_fetch_non_coherent)))
-    {
-        if (!RemoveUnusedFramebufferFetch(this, root, &mSymbolTable))
-        {
-            return false;
-        }
-    }
-
     if (!useIR)
     {
+        // Turn |inout| variables that are never read from into |out| before collecting variables
+        // and before PLS uses them.
+        if (mShaderVersion >= 300 &&
+            (IsExtensionEnabled(mExtensionBehavior, TExtension::EXT_shader_framebuffer_fetch) ||
+             IsExtensionEnabled(mExtensionBehavior,
+                                TExtension::EXT_shader_framebuffer_fetch_non_coherent)))
+        {
+            if (!RemoveUnusedFramebufferFetch(this, root, &mSymbolTable))
+            {
+                return false;
+            }
+        }
+
         // Fold expressions that could not be folded before validation that was done as a part of
         // parsing.
         if (!FoldExpressions(this, root, &mDiagnostics))
@@ -959,27 +958,13 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     // We need to generate globals early if we have non constant initializers enabled
     bool initializeLocalsAndGlobals =
         compileOptions.initializeUninitializedLocals && !IsOutputHLSL(getOutputType());
-    bool canUseLoopsToInitialize       = !compileOptions.dontUseLoopsToInitializeVariables;
-    bool highPrecisionSupported        = isHighPrecisionSupported();
+    bool canUseLoopsToInitialize =
+        !compileOptions.dontUseLoopsToInitializeVariables && isHighPrecisionSupported();
     bool enableNonConstantInitializers = IsExtensionEnabled(
         mExtensionBehavior, TExtension::EXT_shader_non_constant_global_initializers);
-    // forceDeferNonConstGlobalInitializers is needed for MSL
-    // to convert a non-const global. For example:
-    //
-    //    int someGlobal = 123;
-    //
-    // to
-    //
-    //    int someGlobal;
-    //    void main() {
-    //        someGlobal = 123;
-    //
-    // This is because MSL doesn't allow statically initialized non-const globals.
-    bool forceDeferNonConstGlobalInitializers = getOutputType() == SH_MSL_METAL_OUTPUT;
-
     if (enableNonConstantInitializers &&
         !DeferGlobalInitializers(this, root, initializeLocalsAndGlobals, canUseLoopsToInitialize,
-                                 highPrecisionSupported, forceDeferNonConstGlobalInitializers,
+                                 compileOptions.forceDeferNonConstGlobalInitializers,
                                  &mSymbolTable))
     {
         return false;
@@ -1001,11 +986,14 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         }
     }
 
-    if (IsSpecWithFunctionBodyNewScope(mShaderSpec, mShaderVersion))
+    if (!useIR)
     {
-        if (!ReplaceShadowingVariables(this, root, &mSymbolTable))
+        if (IsSpecWithFunctionBodyNewScope(mShaderSpec, mShaderVersion))
         {
-            return false;
+            if (!ReplaceShadowingVariables(this, root, &mSymbolTable))
+            {
+                return false;
+            }
         }
     }
 
@@ -1218,15 +1206,18 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         }
     }
 
-    // In case the last case inside a switch statement is a certain type of no-op, GLSL compilers in
-    // drivers may not accept it. In this case we clean up the dead code from the end of switch
-    // statements. This is also required because PruneNoOps or RemoveUnreferencedVariables may have
-    // left switch statements that only contained an empty declaration inside the final case in an
-    // invalid state. Relies on that PruneNoOps and RemoveUnreferencedVariables have already been
-    // run.
-    if (!PruneEmptyCases(this, root))
+    if (!useIR)
     {
-        return false;
+        // In case the last case inside a switch statement is a certain type of no-op, GLSL
+        // compilers in drivers may not accept it. In this case we clean up the dead code from the
+        // end of switch statements. This is also required because PruneNoOps or
+        // RemoveUnreferencedVariables may have left switch statements that only contained an empty
+        // declaration inside the final case in an invalid state. Relies on that PruneNoOps and
+        // RemoveUnreferencedVariables have already been run.
+        if (!PruneEmptyCases(this, root))
+        {
+            return false;
+        }
     }
 
     // Run after RemoveUnreferencedVariables, validate that the shader does not have excessively
@@ -1335,7 +1326,7 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
     // be optimized out
     if (!enableNonConstantInitializers &&
         !DeferGlobalInitializers(this, root, initializeLocalsAndGlobals, canUseLoopsToInitialize,
-                                 highPrecisionSupported, forceDeferNonConstGlobalInitializers,
+                                 compileOptions.forceDeferNonConstGlobalInitializers,
                                  &mSymbolTable))
     {
         return false;
@@ -1363,7 +1354,7 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         }
 
         if (!InitializeUninitializedLocals(this, root, getShaderVersion(), canUseLoopsToInitialize,
-                                           highPrecisionSupported, &getSymbolTable()))
+                                           &getSymbolTable()))
         {
             return false;
         }
@@ -1386,11 +1377,14 @@ bool TCompiler::checkAndSimplifyAST(TIntermBlock *root,
         }
     }
 
-    if (compileOptions.rewriteRepeatedAssignToSwizzled)
+    if (!useIR)
     {
-        if (!sh::RewriteRepeatedAssignToSwizzled(this, root))
+        if (compileOptions.rewriteRepeatedAssignToSwizzled)
         {
-            return false;
+            if (!sh::RewriteRepeatedAssignToSwizzled(this, root))
+            {
+                return false;
+            }
         }
     }
 
@@ -1855,7 +1849,7 @@ bool TCompiler::initializeGLPosition(TIntermBlock *root)
     if (!list.empty())
     {
         return InitializeVariables(this, root, list, &mSymbolTable, mShaderVersion,
-                                   mExtensionBehavior, false, false);
+                                   mExtensionBehavior, false);
     }
 
     return true;
@@ -1953,7 +1947,7 @@ bool TCompiler::initializeOutputVariables(TIntermBlock *root)
     }
 
     return InitializeVariables(this, root, list, &mSymbolTable, mShaderVersion, mExtensionBehavior,
-                               false, false);
+                               false);
 }
 
 const TExtensionBehavior &TCompiler::getExtensionBehavior() const
