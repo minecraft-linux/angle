@@ -652,10 +652,12 @@ ANGLE_INLINE GLenum ShPixelLocalStorageFormatToGLenum(ShPixelLocalStorageFormat 
             return GL_RGBA8I;
         case ShPixelLocalStorageFormat::RGBA8UI:
             return GL_RGBA8UI;
-        case ShPixelLocalStorageFormat::R32UI:
-            return GL_R32UI;
         case ShPixelLocalStorageFormat::R32F:
             return GL_R32F;
+        case ShPixelLocalStorageFormat::R32I:
+            return GL_R32I;
+        case ShPixelLocalStorageFormat::R32UI:
+            return GL_R32UI;
     }
     UNREACHABLE();
     return GL_NONE;
@@ -3139,12 +3141,6 @@ bool ValidateStateQuery(const Context *context,
             break;
     }
 
-    // pname is valid, but there are no parameters to return
-    if (*numParams == 0)
-    {
-        return false;
-    }
-
     return true;
 }
 
@@ -5017,6 +5013,14 @@ bool ValidatePushGroupMarkerEXT(const Context *context,
                                 GLsizei length,
                                 const char *marker)
 {
+    // This is to prevent the stack from getting too large. The limit used here is also used for
+    // pushing debug groups.
+    if (context->getState().getGroupMarkerCount() >= context->getCaps().maxDebugGroupStackDepth)
+    {
+        ANGLE_VALIDATION_ERROR(GL_STACK_OVERFLOW, kExceedsMaxGroupMarkerStackDepth);
+        return false;
+    }
+
     return true;
 }
 
@@ -8487,7 +8491,7 @@ bool ValidateGetInternalFormativBase(const Context *context,
                                      GLenum target,
                                      GLenum internalformat,
                                      GLenum pname,
-                                     GLsizei bufSize,
+                                     GLsizei count,
                                      GLsizei *numParams)
 {
     if (numParams)
@@ -8545,9 +8549,9 @@ bool ValidateGetInternalFormativBase(const Context *context,
             return false;
     }
 
-    if (bufSize < 0)
+    if (count < 0)
     {
-        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kInsufficientBufferSize);
+        ANGLE_VALIDATION_ERROR(GL_INVALID_VALUE, kNegativeCount);
         return false;
     }
 
@@ -8579,8 +8583,8 @@ bool ValidateGetInternalFormativBase(const Context *context,
 
     if (numParams)
     {
-        // glGetInternalFormativ will not overflow bufSize
-        *numParams = std::min(bufSize, maxWriteParams);
+        // glGetInternalFormativ will not overflow count
+        *numParams = std::min(count, maxWriteParams);
     }
 
     return true;

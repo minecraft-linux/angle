@@ -381,6 +381,15 @@ class ErrorContext : angle::NonCopyable
 class GlobalOps : angle::NonCopyable
 {
   public:
+    enum class Api : uint8_t
+    {
+        Egl    = 0,
+        OpenCL = 1,
+
+        InvalidEnum = 2,
+        EnumCount   = InvalidEnum,
+    };
+
     virtual ~GlobalOps() = default;
 
     virtual void putBlob(const angle::BlobCacheKey &key, const angle::MemoryBuffer &value) = 0;
@@ -390,6 +399,8 @@ class GlobalOps : angle::NonCopyable
         const std::shared_ptr<angle::Closure> &task) = 0;
 
     virtual void notifyDeviceLost() = 0;
+
+    virtual GlobalOps::Api getFrontendApi() const = 0;
 };
 
 class RenderPassDesc;
@@ -551,6 +562,8 @@ class MemoryProperties final : angle::NonCopyable
     uint32_t getMemoryHeapCount() const { return mMemoryProperties.memoryHeapCount; }
     uint32_t getMemoryTypeCount() const { return mMemoryProperties.memoryTypeCount; }
 
+    uint32_t findTileMemoryTypeIndex() const;
+
     void log(std::ostringstream &out) const;
 
   private:
@@ -614,6 +627,15 @@ VkResult AllocateImageMemoryWithRequirements(ErrorContext *context,
                                              Image *image,
                                              uint32_t *memoryTypeIndexOut,
                                              DeviceMemory *deviceMemoryOut);
+
+VkResult AllocateImageMemoryFromTileHeap(ErrorContext *context,
+                                         MemoryAllocationType memoryAllocationType,
+                                         VkMemoryPropertyFlags requestedMemoryPropertyFlags,
+                                         VkMemoryPropertyFlags *memoryPropertyFlagsOut,
+                                         Image *image,
+                                         uint32_t *memoryTypeIndexOut,
+                                         DeviceMemory *deviceMemoryOut,
+                                         VkDeviceSize *sizeOut);
 
 VkResult AllocateBufferMemoryWithRequirements(ErrorContext *context,
                                               MemoryAllocationType memoryAllocationType,
@@ -1494,6 +1516,9 @@ void InitFragmentShadingRateKHRDeviceFunction(VkDevice device);
 // VK_KHR_maintenance5
 void InitMaintenance5Functions(VkDevice device);
 
+// VK_QCOM_tile_memory_heap
+void InitTileMemoryHeapFunctions(VkDevice device);
+
 // VK_GOOGLE_display_timing
 void InitGetPastPresentationTimingGoogleFunction(VkDevice device);
 
@@ -1684,6 +1709,9 @@ enum class RenderPassClosureReason
     CopyTextureOnCPU,
     TextureReformatToRenderable,
     OutOfReservedQueueSerialForOutsideCommands,
+
+    // VK_QCOM_tile_memory_heap
+    TileMemorySimulatedClear,
 
     // UtilsVk
     GenerateMipmapWithDraw,

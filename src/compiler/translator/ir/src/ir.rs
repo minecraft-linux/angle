@@ -5,7 +5,7 @@
 // The IR itself, consisting of a number of enums and structs.
 
 use super::instruction;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 // Strong types for ids that refer to constants, registers, variables, types etc.  They are used to
 // look information up in different tables.  In all cases, 0 means no applicable ID.
@@ -40,6 +40,7 @@ pub struct TypeId {
 }
 
 // Fixed enums for faster type lookup
+// Note: if more types are added here or the values are changed, adjust MAX_PREDEFINED_TYPE_ID.
 // TODO(http://anglebug.com/349994211): In the future, we can duplicate the reserved ids in an
 // enum, so that static types, autogen'ed symbols etc already know their (type) ids.
 pub const TYPE_ID_VOID: TypeId = TypeId { id: 0 };
@@ -72,9 +73,12 @@ pub const TYPE_ID_MAT3X4: TypeId = TypeId { id: 24 };
 pub const TYPE_ID_MAT4X2: TypeId = TypeId { id: 25 };
 pub const TYPE_ID_MAT4X3: TypeId = TypeId { id: 26 };
 pub const TYPE_ID_MAT4: TypeId = TypeId { id: 27 };
+const MAX_PREDEFINED_TYPE_ID: u32 = TYPE_ID_MAT4.id;
 
 // Fixed enums for bool constants to avoid tracking whether they are defined or not, plus other
 // constants for convenience.
+// Note: if more constants are added here or the values are changed, adjust
+// MAX_PREDEFINED_CONSTANT_ID.
 pub const CONSTANT_ID_FALSE: ConstantId = ConstantId { id: 0 };
 pub const CONSTANT_ID_TRUE: ConstantId = ConstantId { id: 1 };
 pub const CONSTANT_ID_FLOAT_ZERO: ConstantId = ConstantId { id: 2 };
@@ -86,6 +90,7 @@ pub const CONSTANT_ID_UINT_ONE: ConstantId = ConstantId { id: 7 };
 pub const CONSTANT_ID_YUV_CSC_ITU601: ConstantId = ConstantId { id: 8 };
 pub const CONSTANT_ID_YUV_CSC_ITU601_FULL_RANGE: ConstantId = ConstantId { id: 9 };
 pub const CONSTANT_ID_YUV_CSC_ITU709: ConstantId = ConstantId { id: 10 };
+const MAX_PREDEFINED_CONSTANT_ID: u32 = CONSTANT_ID_YUV_CSC_ITU709.id;
 
 // Prefixes used for symbols.
 pub const USER_SYMBOL_PREFIX: &str = "_u";
@@ -175,7 +180,7 @@ impl TypedId {
         }
     }
 
-    pub fn to_register_id(&self) -> TypedRegisterId {
+    pub fn as_register_id(&self) -> TypedRegisterId {
         TypedRegisterId {
             id: self.id.get_register(),
             type_id: self.type_id,
@@ -1078,6 +1083,21 @@ impl Block {
         self.instructions.rotate_right(1);
     }
 
+    pub fn prepend_code(&mut self, mut block: Block) {
+        // Prepend the code in `block` to the code in `self`.  There may be other blocks that
+        // reference `self`, so this operation simply makes `self` the merge block of `block`, then
+        // swaps the contents of `self` and `block` to make existing references effectively point
+        // to the new code being prepended.
+        std::mem::swap(self, &mut block);
+        // If there's a merge input, it should remain in place.
+        std::mem::swap(&mut self.input, &mut block.input);
+
+        let last_block = self.get_merge_chain_last_block_mut();
+        last_block.terminate(OpCode::NextBlock);
+        // Note: after the above swap, `block` now contains what was previously in `self`.
+        last_block.set_merge_block(block);
+    }
+
     // Whether the block is already terminated.  This is used for assertions, but also ensures that
     // dead code after return/break/continue/etc is dropped automatically.
     pub fn is_terminated(&self) -> bool {
@@ -1139,10 +1159,10 @@ impl Block {
     where
         Visit: Fn(&mut State, &Self),
     {
-        self.loop_condition.as_ref().inspect(|sub_block| visit(state, &*sub_block));
-        self.block1.as_ref().inspect(|sub_block| visit(state, &*sub_block));
-        self.block2.as_ref().inspect(|sub_block| visit(state, &*sub_block));
-        self.case_blocks.iter().for_each(|sub_block| visit(state, &*sub_block));
+        self.loop_condition.as_ref().inspect(|sub_block| visit(state, sub_block));
+        self.block1.as_ref().inspect(|sub_block| visit(state, sub_block));
+        self.block2.as_ref().inspect(|sub_block| visit(state, sub_block));
+        self.case_blocks.iter().for_each(|sub_block| visit(state, sub_block));
     }
     pub fn for_each_sub_block_mut<State, Transform>(
         &mut self,
@@ -1181,44 +1201,44 @@ pub enum ConstantValue {
 
 impl ConstantValue {
     pub fn get_float(&self) -> f32 {
-        match self {
-            &ConstantValue::Float(f) => f,
+        match *self {
+            ConstantValue::Float(f) => f,
             _ => panic!("Internal error: Expected a float constant"),
         }
     }
 
     pub fn get_int(&self) -> i32 {
-        match self {
-            &ConstantValue::Int(i) => i,
+        match *self {
+            ConstantValue::Int(i) => i,
             _ => panic!("Internal error: Expected an int constant"),
         }
     }
 
     pub fn get_uint(&self) -> u32 {
-        match self {
-            &ConstantValue::Uint(u) => u,
+        match *self {
+            ConstantValue::Uint(u) => u,
             _ => panic!("Internal error: Expected an unsigned int constant"),
         }
     }
 
     pub fn get_bool(&self) -> bool {
-        match self {
-            &ConstantValue::Bool(b) => b,
+        match *self {
+            ConstantValue::Bool(b) => b,
             _ => panic!("Internal error: Expected a bool constant"),
         }
     }
 
     pub fn get_yuv_csc(&self) -> YuvCscStandard {
-        match self {
-            &ConstantValue::YuvCsc(s) => s,
+        match *self {
+            ConstantValue::YuvCsc(s) => s,
             _ => panic!("Internal error: Expected a yuvCscStandardEXT constant"),
         }
     }
 
     pub fn get_index(&self) -> u32 {
-        match self {
-            &ConstantValue::Int(i) => i as u32,
-            &ConstantValue::Uint(u) => u,
+        match *self {
+            ConstantValue::Int(i) => i as u32,
+            ConstantValue::Uint(u) => u,
             _ => panic!("Internal error: Expected an index constant"),
         }
     }
@@ -1240,26 +1260,51 @@ impl ConstantValue {
 pub struct Constant {
     pub type_id: TypeId,
     pub value: ConstantValue,
+    pub is_dead_code_eliminated: bool,
 }
 
 impl Constant {
     pub fn new_bool(value: bool) -> Constant {
-        Constant { type_id: TYPE_ID_BOOL, value: ConstantValue::Bool(value) }
+        Constant {
+            type_id: TYPE_ID_BOOL,
+            value: ConstantValue::Bool(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_int(value: i32) -> Constant {
-        Constant { type_id: TYPE_ID_INT, value: ConstantValue::Int(value) }
+        Constant {
+            type_id: TYPE_ID_INT,
+            value: ConstantValue::Int(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_uint(value: u32) -> Constant {
-        Constant { type_id: TYPE_ID_UINT, value: ConstantValue::Uint(value) }
+        Constant {
+            type_id: TYPE_ID_UINT,
+            value: ConstantValue::Uint(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_float(value: f32) -> Constant {
-        Constant { type_id: TYPE_ID_FLOAT, value: ConstantValue::Float(value) }
+        Constant {
+            type_id: TYPE_ID_FLOAT,
+            value: ConstantValue::Float(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_yuv_csc(value: YuvCscStandard) -> Constant {
-        Constant { type_id: TYPE_ID_YUV_CSC_STANDARD, value: ConstantValue::YuvCsc(value) }
+        Constant {
+            type_id: TYPE_ID_YUV_CSC_STANDARD,
+            value: ConstantValue::YuvCsc(value),
+            is_dead_code_eliminated: false,
+        }
     }
     pub fn new_composite(type_id: TypeId, params: Vec<ConstantId>) -> Constant {
-        Constant { type_id, value: ConstantValue::Composite(params) }
+        Constant {
+            type_id,
+            value: ConstantValue::Composite(params),
+            is_dead_code_eliminated: false,
+        }
     }
 }
 
@@ -1336,6 +1381,7 @@ pub struct Variable {
     // Reflection info
     pub is_const: bool,
     pub is_static_use: bool,
+    pub is_dead_code_eliminated: bool,
 }
 
 impl Variable {
@@ -1358,6 +1404,7 @@ impl Variable {
             scope,
             is_const: false,
             is_static_use: false,
+            is_dead_code_eliminated: false,
         }
     }
 
@@ -1375,6 +1422,7 @@ impl Variable {
             scope: VariableScope::Global,
             is_const: true,
             is_static_use: false,
+            is_dead_code_eliminated: false,
         }
     }
 }
@@ -1438,7 +1486,7 @@ pub enum BuiltIn {
 }
 
 // Whether a function parameter is `in`, `out` or `inout`.
-#[derive(Copy, Clone)]
+#[derive(Copy, Clone, PartialEq)]
 #[cfg_attr(debug_assertions, derive(Debug))]
 pub enum FunctionParamDirection {
     Input,
@@ -1613,7 +1661,7 @@ pub enum Decoration {
     Buffer,
     PushConstant,
     NonCoherent,
-    YUV,
+    Yuv,
     // TODO(http://anglebug.com/349994211): handle __pixel_localEXT, likely in combination with
     // Input/Output/InputOutput
     // Indicates that a variable (excluding built-ins) is an input to the shader
@@ -1677,7 +1725,7 @@ impl Decorations {
     }
 
     pub fn has(&self, query: Decoration) -> bool {
-        self.decorations.iter().any(|&decoration| decoration == query)
+        self.decorations.contains(&query)
     }
 }
 
@@ -1779,6 +1827,8 @@ pub enum Type {
     UnsizedArray(TypeId),
     // A pointer to a type, includes variables, access chains etc
     Pointer(TypeId),
+    // An eliminated type that doesn't need to be declared in the output.
+    DeadCodeEliminated,
 }
 
 impl Type {
@@ -1846,6 +1896,10 @@ impl Type {
         matches!(self, Type::Pointer(_))
     }
 
+    pub fn is_dead_code_eliminated(&self) -> bool {
+        matches!(self, Type::DeadCodeEliminated)
+    }
+
     pub fn get_scalar_basic_type(&self) -> BasicType {
         match self {
             &Type::Scalar(basic_type) => basic_type,
@@ -1868,12 +1922,12 @@ impl Type {
     }
 
     pub fn get_element_type_id(&self) -> Option<TypeId> {
-        match self {
-            &Type::Vector(element_id, _) => Some(element_id),
-            &Type::Matrix(element_id, _) => Some(element_id),
-            &Type::Array(element_id, _) => Some(element_id),
-            &Type::UnsizedArray(element_id) => Some(element_id),
-            &Type::Pointer(element_id) => Some(element_id),
+        match *self {
+            Type::Vector(element_id, _) => Some(element_id),
+            Type::Matrix(element_id, _) => Some(element_id),
+            Type::Array(element_id, _) => Some(element_id),
+            Type::UnsizedArray(element_id) => Some(element_id),
+            Type::Pointer(element_id) => Some(element_id),
             _ => None,
         }
     }
@@ -2079,6 +2133,11 @@ pub struct IRMeta {
     per_vertex_out_is_redeclared: bool,
     // TODO(http://anglebug.com/349994211): invariant and others that can be globally set, do they
     // need to be tracked here?
+
+    // Set of variables that are required to be zero-initialized before output generation.  This
+    // set is determined during parse, but zero-initialization needs to be done late in
+    // compilation.
+    variables_pending_zero_initialization: HashSet<VariableId>,
 }
 
 impl IRMeta {
@@ -2221,6 +2280,7 @@ impl IRMeta {
             gs_max_vertices: 0,
             per_vertex_in_is_redeclared: false,
             per_vertex_out_is_redeclared: false,
+            variables_pending_zero_initialization: HashSet::new(),
         }
     }
 
@@ -2372,7 +2432,7 @@ impl IRMeta {
 
     // Returns a predefined type id for vectors, see TYPE_ID_* constants.
     pub fn get_vector_type_id(&self, basic_type: BasicType, vector_size: u32) -> TypeId {
-        debug_assert!(vector_size >= 2 && vector_size <= 4);
+        debug_assert!((2..=4).contains(&vector_size));
 
         let offset = vector_size - 2;
 
@@ -2402,8 +2462,8 @@ impl IRMeta {
 
     // Returns a predefined type id for matrices, see TYPE_ID_* constants.
     pub fn get_matrix_type_id(&self, column_count: u32, row_count: u32) -> TypeId {
-        debug_assert!(column_count >= 2 && column_count <= 4);
-        debug_assert!(row_count >= 2 && row_count <= 4);
+        debug_assert!((2..=4).contains(&column_count));
+        debug_assert!((2..=4).contains(&row_count));
 
         let offset = (column_count - 2) * 3 + (row_count - 2);
         TypeId { id: TYPE_ID_MAT2.id + offset }
@@ -2496,16 +2556,78 @@ impl IRMeta {
         components: Vec<ConstantId>,
     ) -> ConstantId {
         // Look up the composite constant; if one doesn't exist, create it.
-        let constant_id = *self
-            .composite_constant_map
-            .entry((type_id, components.clone()))
-            .or_insert_with(|| {
-                Self::add_constant_and_get_id(
-                    &mut self.constants,
-                    Constant::new_composite(type_id, components),
-                )
-            });
-        constant_id
+        *self.composite_constant_map.entry((type_id, components.clone())).or_insert_with(|| {
+            Self::add_constant_and_get_id(
+                &mut self.constants,
+                Constant::new_composite(type_id, components),
+            )
+        })
+    }
+
+    pub fn dead_code_eliminate_variable(&mut self, id: VariableId) {
+        // The variable is expected to already be removed from the IR, and this is just marking it
+        // as eliminated.
+        self.variables[id.id as usize].is_dead_code_eliminated = true;
+    }
+    pub fn dead_code_eliminate_constant(&mut self, id: ConstantId) {
+        // Don't dead-code-eliminate predefined constants, they may be referenced by future
+        // transformations.
+        if id.id <= MAX_PREDEFINED_CONSTANT_ID {
+            return;
+        }
+
+        // Mark the constant as dead-code-eliminated.
+        let constant = &mut self.constants[id.id as usize];
+        constant.is_dead_code_eliminated = true;
+
+        // Remove the constant from the constant map, so this id is never returned in future
+        // lookups.
+        match constant.value {
+            ConstantValue::Float(f) => {
+                self.float_constant_map.remove(&f.to_bits());
+            }
+            ConstantValue::Int(i) => {
+                self.int_constant_map.remove(&i);
+            }
+            ConstantValue::Uint(u) => {
+                self.uint_constant_map.remove(&u);
+            }
+            ConstantValue::Bool(_) | ConstantValue::YuvCsc(_) => {
+                // Nothing to do, all possible values are predefined.
+            }
+            ConstantValue::Composite(ref components) => {
+                self.composite_constant_map.remove(&(constant.type_id, components.clone()));
+            }
+        };
+    }
+    pub fn dead_code_eliminate_type(&mut self, id: TypeId) {
+        // Don't dead-code-eliminate predefined types, they may be referenced by future
+        // transformations.
+        if id.id <= MAX_PREDEFINED_TYPE_ID {
+            return;
+        }
+
+        let type_info = &mut self.types[id.id as usize];
+
+        // Remove the type from the type map, so this id is never returned in future lookups.
+        match *type_info {
+            Type::Image(basic_type, image_type) => {
+                self.image_type_map.remove(&(basic_type, image_type));
+            }
+            Type::Array(element_type_id, count) => {
+                self.array_type_map.remove(&(element_type_id, count));
+            }
+            Type::UnsizedArray(element_type_id) => {
+                self.array_type_map.remove(&(element_type_id, 0));
+            }
+            Type::Pointer(pointee_type_id) => {
+                self.pointer_type_map.remove(&pointee_type_id);
+            }
+            _ => {}
+        }
+
+        // Mark the type as dead-code-eliminated.
+        *type_info = Type::DeadCodeEliminated;
     }
 
     // Generate the "null" value of a given type.  That is 0 for numeric types, false for boolean,
@@ -2543,7 +2665,7 @@ impl IRMeta {
                     .collect();
                 self.get_constant_composite(type_id, components)
             }
-            Type::Struct(.., StructSpecialization::InterfaceBlock) => {
+            Type::Struct(..) => {
                 panic!("Internal error: Cannot create a null value of interface block type")
             }
             Type::UnsizedArray(_) => {
@@ -2553,6 +2675,9 @@ impl IRMeta {
                 panic!("Internal error: Cannot create a null value of pointer type")
             }
             Type::Image(..) => panic!("Internal error: Cannot create a null value of image type"),
+            Type::DeadCodeEliminated => {
+                panic!("Internal error: Cannot create a null value of dead-code-eliminated type")
+            }
         }
     }
 
@@ -2599,9 +2724,28 @@ impl IRMeta {
         self.add_variable(var)
     }
 
+    // Used only by builder.rs.  Transformations should set the initializer at the same time as
+    // declaring the variable with `declare_variable`.
     pub fn set_variable_initializer(&mut self, id: VariableId, constant_id: ConstantId) {
         debug_assert!(self.variables[id.id as usize].initializer.is_none());
         self.variables[id.id as usize].initializer = Some(constant_id);
+        self.on_variable_initialized(id);
+    }
+    pub fn on_variable_initialized(&mut self, id: VariableId) {
+        // Now that the initializer is visited (during parse), the variable won't need
+        // zero-initialization.
+        self.variables_pending_zero_initialization.remove(&id);
+    }
+    pub fn require_variable_zero_initialization(&mut self, id: VariableId) {
+        debug_assert!(!self.variable_needs_zero_initialization(id));
+        self.variables_pending_zero_initialization.insert(id);
+    }
+    pub fn variable_needs_zero_initialization(&self, id: VariableId) -> bool {
+        self.variables_pending_zero_initialization.contains(&id)
+    }
+    pub fn on_variable_zero_initialization_done(&mut self, id: VariableId) {
+        debug_assert!(self.variable_needs_zero_initialization(id));
+        self.variables_pending_zero_initialization.remove(&id);
     }
 
     pub fn add_function(&mut self, function: Function) -> FunctionId {

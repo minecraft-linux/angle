@@ -26,7 +26,7 @@
 
 // Version number for shader translation API.
 // It is incremented every time the API changes.
-#define ANGLE_SH_VERSION 388
+#define ANGLE_SH_VERSION 396
 
 enum ShShaderSpec
 {
@@ -37,7 +37,6 @@ enum ShShaderSpec
     SH_WEBGL2_SPEC,
 
     SH_GLES3_1_SPEC,
-    SH_WEBGL3_SPEC,
 
     SH_GLES3_2_SPEC,
 };
@@ -114,6 +113,7 @@ enum class ShPixelLocalStorageFormat : uint8_t
     RGBA8I,
     RGBA8UI,
     R32F,
+    R32I,
     R32UI,
 };
 
@@ -147,11 +147,6 @@ struct ShPixelLocalStorageOptions
     // ShPixelLocalStorageType::ImageLoadStore only: Can we use rgba8/rgba8i/rgba8ui image formats?
     // Or do we need to manually pack and unpack from r32i/r32ui?
     bool supportsNativeRGBA8ImageFormats = false;
-
-    // anglebug.com/42266263 -- Metal [[raster_order_group()]] does not work for read_write textures
-    // on AMD when the render pass doesn't have a color attachment on slot 0. To work around this we
-    // attach one of the PLS textures to GL_COLOR_ATTACHMENT0, if there isn't one already.
-    bool renderPassNeedsAMDRasterOrderGroupsWorkaround = false;
 };
 
 struct ShCompileOptions
@@ -230,7 +225,8 @@ struct ShCompileOptions
     uint64_t unfoldShortCircuit : 1;
 
     // This flag initializes output variables to 0 at the beginning of main().  It is to avoid
-    // undefined behaviors.
+    // undefined behaviors. Additionally, it is intended as a workaround for drivers which get
+    // context lost if gl_FragColor is not written.
     uint64_t initOutputVariables : 1;
 
     // This flag scalarizes vec/ivec/bvec/mat constructor args.  It is intended as a workaround for
@@ -392,13 +388,15 @@ struct ShCompileOptions
     // VK_EXT_transform_feedback extension.
     uint64_t addVulkanXfbExtensionSupportCode : 1;
 
-    // This flag initializes fragment shader's output variables to zero at the beginning of the
-    // fragment shader's main(). It is intended as a workaround for drivers which get context lost
-    // if gl_FragColor is not written.
-    uint64_t initFragmentOutputVariables : 1;
+    // Reject shaders with variables that go above set limits; 2GB for uniform buffer objects, 64KB
+    // for private variables and 16MB for the total size of private variables.
+    uint64_t rejectWebglShadersWithLargeVariables : 1;
 
     // Always write explicit location layout qualifiers for fragment outputs.
     uint64_t explicitFragmentLocations : 1;
+
+    // Dithering is emulated by injecting code in the fragment shader
+    uint64_t emulateDithering : 1;
 
     // Add round() after applying dither.  This works around a Qualcomm quirk where values can get
     // ceil()ed instead.
@@ -574,10 +572,7 @@ struct ShBuiltInResources
     // function. This applies to Tegra K1 devices.
     int NV_draw_buffers;
 
-    // Set to 1 if highp precision is supported in the ESSL 1.00 version of the
-    // fragment language. Does not affect versions of the language where highp
-    // support is mandatory.
-    // Default is 0.
+    // Unused, highp support is always assumed.
     int FragmentPrecisionHigh;
 
     // GLSL ES 3.0 constants.
@@ -705,7 +700,6 @@ struct ShBuiltInResources
 
     // EXT_geometry_shader constants
     int MaxGeometryUniformComponents;
-    int MaxGeometryUniformBlocks;
     int MaxGeometryInputComponents;
     int MaxGeometryOutputComponents;
     int MaxGeometryOutputVertices;
@@ -713,7 +707,6 @@ struct ShBuiltInResources
     int MaxGeometryTextureImageUnits;
     int MaxGeometryAtomicCounterBuffers;
     int MaxGeometryAtomicCounters;
-    int MaxGeometryShaderStorageBlocks;
     int MaxGeometryShaderInvocations;
     int MaxGeometryImageUniforms;
 
@@ -738,9 +731,6 @@ struct ShBuiltInResources
     int MaxTessEvaluationImageUniforms;
     int MaxTessEvaluationAtomicCounters;
     int MaxTessEvaluationAtomicCounterBuffers;
-
-    // Subpixel bits used in rasterization.
-    int SubPixelBits;
 
     // APPLE_clip_distance / EXT_clip_cull_distance / ANGLE_clip_cull_distance constants
     int MaxClipDistances;
@@ -961,7 +951,7 @@ uint32_t GetAdvancedBlendEquations(const ShHandle handle);
 //
 inline bool IsWebGLBasedSpec(ShShaderSpec spec)
 {
-    return (spec == SH_WEBGL_SPEC || spec == SH_WEBGL2_SPEC || spec == SH_WEBGL3_SPEC);
+    return (spec == SH_WEBGL_SPEC || spec == SH_WEBGL2_SPEC);
 }
 
 // Can't prefix with just _ because then we might introduce a double underscore, which is not safe

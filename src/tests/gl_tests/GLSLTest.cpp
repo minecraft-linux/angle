@@ -15216,7 +15216,7 @@ void main()
     EXPECT_EQ(0u, program);
 }
 
-// Verify I/O block array locations
+// Verify I/O block locations
 TEST_P(GLSLTest_ES31, IOBlockLocations)
 {
     ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_shader_io_blocks"));
@@ -15343,6 +15343,100 @@ void main()
 })";
 
     ANGLE_GL_PROGRAM_WITH_GS(program, kVS, kGS, kFS);
+    EXPECT_GL_NO_ERROR();
+
+    GLTexture color;
+    glBindTexture(GL_TEXTURE_2D, color);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, 1, 1);
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, color, 0);
+
+    drawQuad(program, "position", 0);
+
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::white);
+}
+
+// Verify I/O block array locations
+TEST_P(GLSLTest_ES31, IOBlockArrayLocations)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_shader_io_blocks"));
+
+    constexpr char kVS[] = R"(#version 310 es
+#extension GL_EXT_shader_io_blocks : require
+
+in highp vec4 position;
+
+layout(location = 0) out vec4 a;
+
+// This should consume locations [3, 8]
+layout(location = 3) out Block
+{
+    vec4 b;
+    vec4 c;
+} block[3];
+
+layout(location = 1) out vec4 d[2];
+layout(location = 9) out vec4 e[4];
+
+void main()
+{
+    a = vec4(0.03, 0.06, 0.09, 0.12);
+    block[0].b = vec4(0.15, 0.18, 0.21, 0.24);
+    block[0].c = vec4(0.27, 0.30, 0.33, 0.36);
+    block[1].b = vec4(0.39, 0.42, 0.45, 0.48);
+    block[1].c = vec4(0.51, 0.54, 0.57, 0.6);
+    block[2].b = vec4(0.63, 0.66, 0.66, 0.69);
+    block[2].c = vec4(0.72, 0.75, 0.78, 0.81);
+    d[0] = vec4(0.84, 0.87, 0.9, 0.93);
+    d[1] = vec4(0.96, 0.99, 0.94, 0.89);
+    e[0] = vec4(0.84, 0.79, 0.74, 0.69);
+    e[1] = vec4(0.64, 0.59, 0.54, 0.49);
+    e[2] = vec4(0.44, 0.39, 0.34, 0.29);
+    e[3] = vec4(0.24, 0.19, 0.14, 0.09);
+    gl_Position = position;
+})";
+
+    constexpr char kFS[] = R"(#version 310 es
+#extension GL_EXT_shader_io_blocks : require
+precision mediump float;
+
+layout(location = 0) out mediump vec4 color;
+
+layout(location = 0) in vec4 a;
+
+layout(location = 3) in Block
+{
+    vec4 b;
+    vec4 c;
+} block[3];
+
+layout(location = 1) in vec4 d[2];
+layout(location = 9) in vec4 e[4];
+
+bool isEq(vec4 a, vec4 b) { return all(lessThan(abs(a-b), vec4(0.001))); }
+
+void main()
+{
+    bool passR = isEq(a, vec4(0.03, 0.06, 0.09, 0.12));
+    bool passG = isEq(block[0].b, vec4(0.15, 0.18, 0.21, 0.24)) &&
+                 isEq(block[0].c, vec4(0.27, 0.30, 0.33, 0.36)) &&
+                 isEq(block[1].b, vec4(0.39, 0.42, 0.45, 0.48)) &&
+                 isEq(block[1].c, vec4(0.51, 0.54, 0.57, 0.6)) &&
+                 isEq(block[2].b, vec4(0.63, 0.66, 0.66, 0.69)) &&
+                 isEq(block[2].c, vec4(0.72, 0.75, 0.78, 0.81));
+    bool passB = isEq(d[0], vec4(0.84, 0.87, 0.9, 0.93)) &&
+                 isEq(d[1], vec4(0.96, 0.99, 0.94, 0.89));
+    bool passA = isEq(e[0], vec4(0.84, 0.79, 0.74, 0.69)) &&
+                 isEq(e[1], vec4(0.64, 0.59, 0.54, 0.49)) &&
+                 isEq(e[2], vec4(0.44, 0.39, 0.34, 0.29)) &&
+                 isEq(e[3], vec4(0.24, 0.19, 0.14, 0.09));
+
+    color = vec4(passR, passG, passB, passA);
+})";
+
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
     EXPECT_GL_NO_ERROR();
 
     GLTexture color;
@@ -18261,6 +18355,32 @@ void main() {
     ASSERT_GL_NO_ERROR();
 }
 
+// Test mix(float, float, bool) is not affected by an invalid value not selected.
+TEST_P(GLSLTest_ES3, MixFloatFloatBoolInvalid)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision highp float;
+uniform vec2 xy;
+uniform bool a;
+out vec4 fragColor;
+void main() {
+    fragColor = vec4(mix(xy.x, xy.y, a) == xy.y, 0.0, 0.0, 1.0);
+}
+)";
+    ANGLE_GL_PROGRAM(testProgram, essl3_shaders::vs::Simple(), kFS);
+    glUseProgram(testProgram);
+    auto xy = glGetUniformLocation(testProgram, "xy");
+    auto a  = glGetUniformLocation(testProgram, "a");
+    ASSERT_GL_NO_ERROR();
+    glUniform2f(xy, NAN, 0.5f);
+    glUniform1i(a, 1);
+    ASSERT_GL_NO_ERROR();
+
+    drawQuad(testProgram, essl3_shaders::PositionAttrib(), 0.5f, 1.0f, true);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor(255, 0, 0, 255));
+    ASSERT_GL_NO_ERROR();
+}
+
 // Test coverage of the mix(uint, uint, bool) overload which was missing in D3D11 translation
 TEST_P(GLSLTest_ES31, MixUintUintBool)
 {
@@ -21098,15 +21218,22 @@ TEST_P(GLSLTest_ES3_InitShaderVariables, NameLookup)
 {
     constexpr char kFS[] = R"(#version 300 es
 out highp vec4 color;
+
+void make_color_active()
+{
+    color.zw = vec2(1.0);
+}
+
 void main()
 {
     highp vec4 color;
     color.x = 1.0;
+    make_color_active();
 }
 )";
     ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
     drawQuad(program, essl3_shaders::PositionAttrib(), 0);
-    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::transparentBlack);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
     ASSERT_GL_NO_ERROR();
 }
 
@@ -21802,6 +21929,113 @@ void main()
     ASSERT_GL_NO_ERROR();
 }
 
+// Test that inactive fragment inout variable compiles fine, with inout locations start from
+// non-zero
+TEST_P(GLSLTest_ES31, InactiveFragmentInout)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_shader_framebuffer_fetch"));
+    const char kVS[] = R"(#version 310 es
+        in vec3 POSITION;
+        void main()
+        {
+            gl_Position = vec4(POSITION, 1.0);
+        })";
+    const char kFS[] = R"(#version 310 es
+        #extension GL_EXT_shader_framebuffer_fetch : require
+        precision mediump float;
+        precision highp int;
+        layout(location = 1) inout highp vec4 activeVar;
+        layout(location = 2) inout highp vec4 inactiveVar;
+        void main()
+        {
+            activeVar = vec4(0.0, 0.0, 0.0, 1.0);
+        })";
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+}
+
+// Test that inactive fragment inout variable used in an unused function compiles fine, with inout
+// locations start from non-zero
+TEST_P(GLSLTest_ES31, InactiveFragmentInoutReferencedInUnusedFunction)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_shader_framebuffer_fetch"));
+    const char kVS[] = R"(#version 310 es
+        in vec3 POSITION;
+        void main()
+        {
+            gl_Position = vec4(POSITION, 1.0);
+        })";
+    const char kFS[] = R"(#version 310 es
+        #extension GL_EXT_shader_framebuffer_fetch : require
+        precision mediump float;
+        precision highp int;
+        layout(location = 1) inout highp vec4 activeVar;
+        layout(location = 2) inout highp vec4 inactiveVar;
+
+        void unusedFunction() {
+            vec4 unusedVar = inactiveVar;
+        }
+
+        void main()
+        {
+            activeVar = vec4(0.0, 0.0, 0.0, 1.0);
+        })";
+    ANGLE_GL_PROGRAM(program, kVS, kFS);
+}
+
+// Test that if the inout variable is inactive, its' location attachment content is preserved
+TEST_P(GLSLTest_ES31, testInactiveInoutPreservesAttachmentContent)
+{
+    const unsigned int kWidth  = 2;
+    const unsigned int kHeight = 2;
+
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_shader_framebuffer_fetch"));
+    const char kFS[] = R"(#version 310 es
+        #extension GL_EXT_shader_framebuffer_fetch : require
+        precision mediump float;
+        precision highp int;
+        layout(location = 1) inout highp vec4 activeVar;
+        layout(location = 2) inout highp vec4 inactiveVar;
+
+        void main()
+        {
+            activeVar = vec4(0.0, 1.0, 0.0, 1.0);
+        })";
+    ANGLE_GL_PROGRAM(program, essl31_shaders::vs::Simple(), kFS);
+
+    GLTexture texture1;
+    glBindTexture(GL_TEXTURE_2D, texture1);
+    // Fill texture1 with red color
+    const std::array<GLColor, kHeight * kHeight> texture1Data = {GLColor::red, GLColor::red,
+                                                                 GLColor::red, GLColor::red};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kWidth, kHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 &texture1Data[0]);
+    GLTexture texture2;
+    glBindTexture(GL_TEXTURE_2D, texture2);
+    // Fill texture2 with blue color
+    const std::array<GLColor, kHeight * kHeight> texture2Data = {GLColor::blue, GLColor::blue,
+                                                                 GLColor::blue, GLColor::blue};
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, kHeight, kHeight, 0, GL_RGBA, GL_UNSIGNED_BYTE,
+                 &texture2Data[0]);
+
+    GLFramebuffer fbo;
+    glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT1, GL_TEXTURE_2D, texture1, 0);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT2, GL_TEXTURE_2D, texture2, 0);
+
+    GLenum drawBuffers[] = {GL_NONE, GL_COLOR_ATTACHMENT1, GL_COLOR_ATTACHMENT2};
+    glDrawBuffers(3, drawBuffers);
+    glUseProgram(program);
+    drawQuad(program, essl31_shaders::PositionAttrib(), 0.5f);
+
+    // Verify that texture1 changes to green, texture2 remains unchanged.
+    GLFramebuffer verifyTextureFBO;
+    glBindFramebuffer(GL_FRAMEBUFFER, verifyTextureFBO);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture1, 0);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::green);
+    glFramebufferTexture2D(GL_DRAW_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture2, 0);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::blue);
+}
+
 // Tests pack/unpack emulation in the shader translator.
 class GLSLTest_ES3_PackUnpackEmulation : public GLSLTest_ES3
 {
@@ -21995,6 +22229,28 @@ void main(void)
     EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
     ASSERT_GL_NO_ERROR();
 }
+
+// Test that if the uniform struct specifier is referenced by non-uniform variables, the
+// sortUniforms() step does not reorder the uniform struct specifier and place it after where it is
+// referenced.
+TEST_P(GLSLTest_ES3, UniformStructSpecifierIsReferencedByNonUniforms)
+{
+    constexpr char kFS[] = R"(#version 300 es
+precision mediump float;
+uniform struct b{vec2 S;}t;
+struct{b x;};
+out vec4 color;
+void main()
+{
+    color = vec4(1.0, 0.0, 0.0, 1.0);
+})";
+    ANGLE_GL_PROGRAM(program, essl3_shaders::vs::Simple(), kFS);
+    glUseProgram(program);
+    drawQuad(program, essl3_shaders::PositionAttrib(), 0.0);
+    EXPECT_PIXEL_COLOR_EQ(0, 0, GLColor::red);
+    EXPECT_GL_NO_ERROR();
+}
+
 }  // anonymous namespace
 
 ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND_ES31_AND_ES32(

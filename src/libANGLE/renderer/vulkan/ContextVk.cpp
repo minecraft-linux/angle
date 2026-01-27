@@ -293,15 +293,6 @@ SurfaceRotation DetermineSurfaceRotation(const gl::Framebuffer *framebuffer,
     }
 }
 
-// Should not generate a copy with modern C++.
-EventName GetTraceEventName(const char *title, uint64_t counter)
-{
-    EventName buf;
-    snprintf(buf.data(), kMaxGpuEventNameLen - 1, "%s %llu", title,
-             static_cast<unsigned long long>(counter));
-    return buf;
-}
-
 vk::ResourceAccess GetColorAccess(const gl::State &state,
                                   const gl::FramebufferState &framebufferState,
                                   const gl::DrawBufferMask &emulatedAlphaMask,
@@ -706,6 +697,8 @@ constexpr angle::PackedEnumMap<RenderPassClosureReason, const char *> kRenderPas
      "Render pass closed due to running out of reserved serials"},
     {RenderPassClosureReason::LegacyDithering, "Render pass closed due to updating legacy dither"},
     {RenderPassClosureReason::SubmitCommands, "Render pass closed at command buffer submission"},
+    {RenderPassClosureReason::TileMemorySimulatedClear,
+     "Temporary render pass used for tile memory clear simulation"},
 }};
 
 VkDependencyFlags GetLocalDependencyFlags(ContextVk *contextVk)
@@ -867,7 +860,6 @@ ContextVk::ContextVk(const gl::State &state, gl::ErrorSet *errorSet, vk::Rendere
       mOutsideRenderPassCommands(nullptr),
       mRenderPassCommands(nullptr),
       mQueryEventType(GraphicsEventCmdBuf::NotInQueryCmd),
-      mGpuEventsEnabled(false),
       mPrimaryBufferEventCounter(0),
       mHasDeferredFlush(false),
       mHasAnyCommandsPendingSubmission(false),
@@ -877,8 +869,6 @@ ContextVk::ContextVk(const gl::State &state, gl::ErrorSet *errorSet, vk::Rendere
       mTotalBufferToImageCopySize(0),
       mEstimatedPendingImageGarbageSize(0),
       mRenderPassCountSinceSubmit(0),
-      mGpuClockSync{std::numeric_limits<double>::max(), std::numeric_limits<double>::max()},
-      mGpuEventTimestampOrigin(0),
       mShareGroupVk(vk::GetImpl(state.getShareGroup())),
       mCommandsPendingSubmissionCount(0)
 {
@@ -1239,6 +1229,8 @@ void ContextVk::onDestroy(const gl::Context *context)
 {
     VkDevice device = getDevice();
 
+    ASSERT(mImagesWithTileMemory.empty());
+
     mCommandState.destroy(device);
 
     // If there is a context lost, destroy all the command buffers and resources regardless of
@@ -1293,7 +1285,6 @@ void ContextVk::onDestroy(const gl::Context *context)
 
     mRenderPassCache.destroy(this);
     mShaderLibrary.destroy(device);
-    mGpuEventQueryPool.destroy(device);
 
     // Must release all Vulkan secondary command buffers before destroying the pools.
     if ((!vk::OutsideRenderPassCommandBuffer::ExecutesInline() ||
@@ -1394,17 +1385,6 @@ angle::Result ContextVk::initialize(const angle::ImageLoadContext &imageLoadCont
                     kDynamicVertexDataSize, true);
     }
 
-#if ANGLE_ENABLE_VULKAN_GPU_TRACE_EVENTS
-    angle::PlatformMethods *platform = ANGLEPlatformCurrent();
-    ASSERT(platform);
-
-    // GPU tracing workaround for anglebug.com/42261625.  The renderer should not emit gpu events
-    // during platform discovery.
-    const unsigned char *gpuEventsEnabled =
-        platform->getTraceCategoryEnabledFlag(platform, "gpu.angle.gpu");
-    mGpuEventsEnabled = gpuEventsEnabled && *gpuEventsEnabled;
-#endif
-
     // Assign initial command buffers from queue
     ANGLE_TRY(vk::OutsideRenderPassCommandBuffer::InitializeCommandPool(
         this, &mCommandPools.outsideRenderPassPool, mRenderer->getQueueFamilyIndex(),
@@ -1423,20 +1403,6 @@ angle::Result ContextVk::initialize(const angle::ImageLoadContext &imageLoadCont
     // Initialize serials to be valid but appear submitted and finished.
     mLastFlushedQueueSerial   = QueueSerial(mCurrentQueueSerialIndex, Serial());
     mLastSubmittedQueueSerial = mLastFlushedQueueSerial;
-
-    if (mGpuEventsEnabled)
-    {
-        // GPU events should only be available if timestamp queries are available.
-        ASSERT(mRenderer->getQueueFamilyProperties().timestampValidBits > 0);
-        // Calculate the difference between CPU and GPU clocks for GPU event reporting.
-        ANGLE_TRY(mGpuEventQueryPool.init(this, VK_QUERY_TYPE_TIMESTAMP,
-                                          vk::kDefaultTimestampQueryPoolSize));
-        ANGLE_TRY(synchronizeCpuGpuTime());
-
-        EventName eventName = GetTraceEventName("Primary", mPrimaryBufferEventCounter);
-        ANGLE_TRY(traceGpuEvent(&mOutsideRenderPassCommands->getCommandBuffer(),
-                                TRACE_EVENT_PHASE_BEGIN, eventName));
-    }
 
     size_t minAlignment = static_cast<size_t>(
         mRenderer->getPhysicalDeviceProperties().limits.minUniformBufferOffsetAlignment);
@@ -1468,6 +1434,11 @@ angle::Result ContextVk::initialize(const angle::ImageLoadContext &imageLoadCont
         {
             ANGLE_TRY(vk::GetImpl(context.second)->flushOutsideRenderPassCommands());
         }
+    }
+
+    if (getFeatures().supportsTileMemoryHeap.enabled)
+    {
+        mImagesWithTileMemory.reserve(4);
     }
 
     return angle::Result::Continue;
@@ -2392,7 +2363,8 @@ angle::Result ContextVk::handleDirtyGraphicsReadOnlyDepthFeedbackLoopMode(
 angle::Result ContextVk::handleDirtyAnySamplePassedQueryEnd(DirtyBits::Iterator *dirtyBitsIterator,
                                                             DirtyBits dirtyBitMask)
 {
-    if (mRenderPassCommands->started())
+    // If we are using tile memory, don't enable this optimization to prevent fallback.
+    if (mRenderPassCommands->started() && mImagesWithTileMemory.empty())
     {
         // When we switch from query enabled draw to query disabled draw, we do immediate flush to
         // ensure the query result will be ready early so that application thread calling
@@ -2707,11 +2679,9 @@ angle::Result ContextVk::handleDirtyGraphicsVertexBuffersVertexInputDynamicState
 
     if (maxAttrib > 0)
     {
-        if (getFeatures().useVertexInputBindingStrideDynamicState.enabled)
+        if (getFeatures().supportsBindVertexBuffers2.enabled)
         {
-            // bindVertexBuffers2EXT() requires extended dynamic state or shader object extension.
             // Since the strides are already set in setVertexInput(), they need not be set here.
-            ASSERT(getFeatures().supportsExtendedDynamicState.enabled);
             if (mUseSizePointerForBindingVertexBuffers)
             {
                 const gl::AttribArray<VkDeviceSize> &bufferSizes =
@@ -2776,8 +2746,7 @@ angle::Result ContextVk::handleDirtyGraphicsVertexBuffersVertexInputDynamicState
                 mismatchingType ? 0 : vertexArrayVk->getCurrentArrayBufferStride(attribIndex);
         }
 
-        // bindVertexBuffers2EXT() requires the extension extended dynamic state or shader object.
-        ASSERT(getFeatures().supportsExtendedDynamicState.enabled);
+        ASSERT(getFeatures().supportsBindVertexBuffers2.enabled);
         if (mUseSizePointerForBindingVertexBuffers)
         {
             const gl::AttribArray<VkDeviceSize> &bufferSizes =
@@ -3760,6 +3729,9 @@ angle::Result ContextVk::submitCommands(const vk::Semaphore *signalSemaphore,
                                         const vk::SharedExternalFence *externalFence,
                                         QueueSubmitReason reason)
 {
+    // Since we just about to flush, deferred flush is no longer deferred.
+    mHasDeferredFlush = false;
+
     if (kEnableCommandStreamDiagnostics)
     {
         dumpCommandStreamDiagnostics();
@@ -3771,7 +3743,13 @@ angle::Result ContextVk::submitCommands(const vk::Semaphore *signalSemaphore,
         mCommandState.flushImagesTransitionToForeign(std::move(mImagesToTransitionToForeign));
     }
 
+    if (!mImagesWithTileMemory.empty())
+    {
+        ANGLE_TRY(finalizeImagesWithTileMemory());
+    }
+
     ANGLE_TRY(mCommandState.insertSubmitDebugMarker(this, reason));
+
     ANGLE_TRY(mRenderer->submitCommands(this, signalSemaphore, externalFence,
                                         mLastFlushedQueueSerial, std::move(mCommandState)));
 
@@ -3786,11 +3764,6 @@ angle::Result ContextVk::submitCommands(const vk::Semaphore *signalSemaphore,
     mShareGroupVk->cleanupExcessiveRefCountedEventGarbage();
 
     mComputeDirtyBits |= mNewComputeCommandBufferDirtyBits;
-
-    if (mGpuEventsEnabled)
-    {
-        ANGLE_TRY(checkCompletedGpuEvents());
-    }
 
     mTotalBufferToImageCopySize       = 0;
     mEstimatedPendingImageGarbageSize = 0;
@@ -3812,8 +3785,10 @@ angle::Result ContextVk::onCopyUpdate(VkDeviceSize size, bool *commandBufferWasF
     *commandBufferWasFlushedOut = false;
 
     mTotalBufferToImageCopySize += size;
-    // If the copy size exceeds the specified threshold, submit the outside command buffer.
-    if (mTotalBufferToImageCopySize >= kMaxBufferToImageCopySize)
+    // If the copy size exceeds the specified threshold, submit the outside command buffer. When
+    // there are images with tile memory in use, avoid submission by trying to avoid triggering tile
+    // memory fallback.
+    if (mTotalBufferToImageCopySize >= kMaxBufferToImageCopySize && mImagesWithTileMemory.empty())
     {
         ANGLE_TRY(flushAndSubmitOutsideRenderPassCommands(
             QueueSubmitReason::BufferToImageUpdateLimitReached));
@@ -3835,321 +3810,6 @@ bool ContextVk::hasExcessPendingGarbage() const
     VkDeviceSize trackedPendingGarbage =
         mRenderer->getPendingSuballocationGarbageSize() + mEstimatedPendingImageGarbageSize;
     return trackedPendingGarbage >= mRenderer->getPendingGarbageSizeLimit();
-}
-
-angle::Result ContextVk::synchronizeCpuGpuTime()
-{
-    ASSERT(mGpuEventsEnabled);
-
-    angle::PlatformMethods *platform = ANGLEPlatformCurrent();
-    ASSERT(platform);
-
-    // To synchronize CPU and GPU times, we need to get the CPU timestamp as close as possible
-    // to the GPU timestamp.  The process of getting the GPU timestamp is as follows:
-    //
-    //             CPU                            GPU
-    //
-    //     Record command buffer
-    //     with timestamp query
-    //
-    //     Submit command buffer
-    //
-    //     Post-submission work             Begin execution
-    //
-    //            ????                    Write timestamp Tgpu
-    //
-    //            ????                       End execution
-    //
-    //            ????                    Return query results
-    //
-    //            ????
-    //
-    //       Get query results
-    //
-    // The areas of unknown work (????) on the CPU indicate that the CPU may or may not have
-    // finished post-submission work while the GPU is executing in parallel. With no further
-    // work, querying CPU timestamps before submission and after getting query results give the
-    // bounds to Tgpu, which could be quite large.
-    //
-    // Using VkEvents, the GPU can be made to wait for the CPU and vice versa, in an effort to
-    // reduce this range. This function implements the following procedure:
-    //
-    //             CPU                            GPU
-    //
-    //     Record command buffer
-    //     with timestamp query
-    //
-    //     Submit command buffer
-    //
-    //     Post-submission work             Begin execution
-    //
-    //            ????                    Set Event GPUReady
-    //
-    //    Wait on Event GPUReady         Wait on Event CPUReady
-    //
-    //       Get CPU Time Ts             Wait on Event CPUReady
-    //
-    //      Set Event CPUReady           Wait on Event CPUReady
-    //
-    //      Get CPU Time Tcpu              Get GPU Time Tgpu
-    //
-    //    Wait on Event GPUDone            Set Event GPUDone
-    //
-    //       Get CPU Time Te                 End Execution
-    //
-    //            Idle                    Return query results
-    //
-    //      Get query results
-    //
-    // If Te-Ts > epsilon, a GPU or CPU interruption can be assumed and the operation can be
-    // retried.  Once Te-Ts < epsilon, Tcpu can be taken to presumably match Tgpu.  Finding an
-    // epsilon that's valid for all devices may be difficult, so the loop can be performed only
-    // a limited number of times and the Tcpu,Tgpu pair corresponding to smallest Te-Ts used for
-    // calibration.
-    //
-    // Note: Once VK_EXT_calibrated_timestamps is ubiquitous, this should be redone.
-
-    ANGLE_TRACE_EVENT0("gpu.angle", "ContextVk::synchronizeCpuGpuTime");
-
-    // Create a query used to receive the GPU timestamp
-    vk::QueryHelper timestampQuery;
-    ANGLE_TRY(mGpuEventQueryPool.allocateQuery(this, &timestampQuery, 1));
-
-    // Create the three events
-    VkEventCreateInfo eventCreateInfo = {};
-    eventCreateInfo.sType             = VK_STRUCTURE_TYPE_EVENT_CREATE_INFO;
-    eventCreateInfo.flags             = 0;
-
-    VkDevice device = getDevice();
-    vk::DeviceScoped<vk::Event> cpuReady(device), gpuReady(device), gpuDone(device);
-    ANGLE_VK_TRY(this, cpuReady.get().init(device, eventCreateInfo));
-    ANGLE_VK_TRY(this, gpuReady.get().init(device, eventCreateInfo));
-    ANGLE_VK_TRY(this, gpuDone.get().init(device, eventCreateInfo));
-
-    constexpr uint32_t kRetries = 10;
-
-    // Time suffixes used are S for seconds and Cycles for cycles
-    double tightestRangeS = 1e6f;
-    double TcpuS          = 0;
-    uint64_t TgpuCycles   = 0;
-    for (uint32_t i = 0; i < kRetries; ++i)
-    {
-        // Reset the events
-        ANGLE_VK_TRY(this, cpuReady.get().reset(device));
-        ANGLE_VK_TRY(this, gpuReady.get().reset(device));
-        ANGLE_VK_TRY(this, gpuDone.get().reset(device));
-
-        // Record the command buffer
-        vk::ScopedPrimaryCommandBuffer scopedCommandBuffer(device);
-
-        ANGLE_TRY(
-            mRenderer->getCommandBufferOneOff(this, getProtectionType(), &scopedCommandBuffer));
-        vk::PrimaryCommandBuffer &commandBuffer = scopedCommandBuffer.get();
-
-        commandBuffer.setEvent(gpuReady.get().getHandle(), VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
-        commandBuffer.waitEvents(1, cpuReady.get().ptr(), VK_PIPELINE_STAGE_HOST_BIT,
-                                 VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT, 0, nullptr, 0, nullptr, 0,
-                                 nullptr);
-        timestampQuery.writeTimestampToPrimary(this, &commandBuffer);
-
-        commandBuffer.setEvent(gpuDone.get().getHandle(), VK_PIPELINE_STAGE_ALL_GRAPHICS_BIT);
-
-        mRenderer->insertSubmitDebugMarkerInCommandBuffer(commandBuffer,
-                                                          QueueSubmitReason::SyncCPUGPUTime);
-
-        ANGLE_VK_TRY(this, commandBuffer.end());
-
-        QueueSerial submitSerial;
-        // vkEvent's are externally synchronized, therefore need work to be submitted before calling
-        // vkGetEventStatus
-        ANGLE_TRY(mRenderer->queueSubmitOneOff(this, std::move(scopedCommandBuffer),
-                                               getProtectionType(), getPriority(), VK_NULL_HANDLE,
-                                               0, &submitSerial));
-
-        // Track it with the submitSerial.
-        timestampQuery.setQueueSerial(submitSerial);
-
-        // Wait for GPU to be ready.  This is a short busy wait.
-        VkResult result = VK_EVENT_RESET;
-        do
-        {
-            result = gpuReady.get().getStatus(device);
-            if (result != VK_EVENT_SET && result != VK_EVENT_RESET)
-            {
-                ANGLE_VK_TRY(this, result);
-            }
-        } while (result == VK_EVENT_RESET);
-
-        double TsS = platform->monotonicallyIncreasingTime(platform);
-
-        // Tell the GPU to go ahead with the timestamp query.
-        ANGLE_VK_TRY(this, cpuReady.get().set(device));
-        double cpuTimestampS = platform->monotonicallyIncreasingTime(platform);
-
-        // Wait for GPU to be done.  Another short busy wait.
-        do
-        {
-            result = gpuDone.get().getStatus(device);
-            if (result != VK_EVENT_SET && result != VK_EVENT_RESET)
-            {
-                ANGLE_VK_TRY(this, result);
-            }
-        } while (result == VK_EVENT_RESET);
-
-        double TeS = platform->monotonicallyIncreasingTime(platform);
-
-        // Get the query results
-        ANGLE_TRY(mRenderer->finishQueueSerial(this, submitSerial));
-
-        vk::QueryResult gpuTimestampCycles(1);
-        ANGLE_TRY(timestampQuery.getUint64Result(this, &gpuTimestampCycles));
-
-        // Use the first timestamp queried as origin.
-        if (mGpuEventTimestampOrigin == 0)
-        {
-            mGpuEventTimestampOrigin =
-                gpuTimestampCycles.getResult(vk::QueryResult::kDefaultResultIndex);
-        }
-
-        // Take these CPU and GPU timestamps if there is better confidence.
-        double confidenceRangeS = TeS - TsS;
-        if (confidenceRangeS < tightestRangeS)
-        {
-            tightestRangeS = confidenceRangeS;
-            TcpuS          = cpuTimestampS;
-            TgpuCycles     = gpuTimestampCycles.getResult(vk::QueryResult::kDefaultResultIndex);
-        }
-    }
-
-    mGpuEventQueryPool.freeQuery(this, &timestampQuery);
-
-    // timestampPeriod gives nanoseconds/cycle.
-    double TgpuS =
-        (TgpuCycles - mGpuEventTimestampOrigin) *
-        static_cast<double>(getRenderer()->getPhysicalDeviceProperties().limits.timestampPeriod) /
-        1'000'000'000.0;
-
-    flushGpuEvents(TgpuS, TcpuS);
-
-    mGpuClockSync.gpuTimestampS = TgpuS;
-    mGpuClockSync.cpuTimestampS = TcpuS;
-
-    return angle::Result::Continue;
-}
-
-angle::Result ContextVk::traceGpuEventImpl(vk::OutsideRenderPassCommandBuffer *commandBuffer,
-                                           char phase,
-                                           const EventName &name)
-{
-    ASSERT(mGpuEventsEnabled);
-
-    GpuEventQuery gpuEvent;
-    gpuEvent.name  = name;
-    gpuEvent.phase = phase;
-    ANGLE_TRY(mGpuEventQueryPool.allocateQuery(this, &gpuEvent.queryHelper, 1));
-
-    gpuEvent.queryHelper.writeTimestamp(this, commandBuffer);
-
-    mInFlightGpuEventQueries.push_back(std::move(gpuEvent));
-    return angle::Result::Continue;
-}
-
-angle::Result ContextVk::checkCompletedGpuEvents()
-{
-    ASSERT(mGpuEventsEnabled);
-
-    angle::PlatformMethods *platform = ANGLEPlatformCurrent();
-    ASSERT(platform);
-
-    int finishedCount = 0;
-
-    for (GpuEventQuery &eventQuery : mInFlightGpuEventQueries)
-    {
-        ASSERT(mRenderer->hasResourceUseSubmitted(eventQuery.queryHelper.getResourceUse()));
-        // Only check the timestamp query if the submission has finished.
-        if (!mRenderer->hasResourceUseFinished(eventQuery.queryHelper.getResourceUse()))
-        {
-            break;
-        }
-
-        // See if the results are available.
-        vk::QueryResult gpuTimestampCycles(1);
-        bool available = false;
-        ANGLE_TRY(eventQuery.queryHelper.getUint64ResultNonBlocking(this, &gpuTimestampCycles,
-                                                                    &available));
-        if (!available)
-        {
-            break;
-        }
-
-        mGpuEventQueryPool.freeQuery(this, &eventQuery.queryHelper);
-
-        GpuEvent gpuEvent;
-        gpuEvent.gpuTimestampCycles =
-            gpuTimestampCycles.getResult(vk::QueryResult::kDefaultResultIndex);
-        gpuEvent.name  = eventQuery.name;
-        gpuEvent.phase = eventQuery.phase;
-
-        mGpuEvents.emplace_back(gpuEvent);
-
-        ++finishedCount;
-    }
-
-    mInFlightGpuEventQueries.erase(mInFlightGpuEventQueries.begin(),
-                                   mInFlightGpuEventQueries.begin() + finishedCount);
-
-    return angle::Result::Continue;
-}
-
-void ContextVk::flushGpuEvents(double nextSyncGpuTimestampS, double nextSyncCpuTimestampS)
-{
-    if (mGpuEvents.empty())
-    {
-        return;
-    }
-
-    angle::PlatformMethods *platform = ANGLEPlatformCurrent();
-    ASSERT(platform);
-
-    // Find the slope of the clock drift for adjustment
-    double lastGpuSyncTimeS  = mGpuClockSync.gpuTimestampS;
-    double lastGpuSyncDiffS  = mGpuClockSync.cpuTimestampS - mGpuClockSync.gpuTimestampS;
-    double gpuSyncDriftSlope = 0;
-
-    double nextGpuSyncTimeS = nextSyncGpuTimestampS;
-    double nextGpuSyncDiffS = nextSyncCpuTimestampS - nextSyncGpuTimestampS;
-
-    // No gpu trace events should have been generated before the clock sync, so if there is no
-    // "previous" clock sync, there should be no gpu events (i.e. the function early-outs
-    // above).
-    ASSERT(mGpuClockSync.gpuTimestampS != std::numeric_limits<double>::max() &&
-           mGpuClockSync.cpuTimestampS != std::numeric_limits<double>::max());
-
-    gpuSyncDriftSlope =
-        (nextGpuSyncDiffS - lastGpuSyncDiffS) / (nextGpuSyncTimeS - lastGpuSyncTimeS);
-
-    for (const GpuEvent &gpuEvent : mGpuEvents)
-    {
-        double gpuTimestampS =
-            (gpuEvent.gpuTimestampCycles - mGpuEventTimestampOrigin) *
-            static_cast<double>(
-                getRenderer()->getPhysicalDeviceProperties().limits.timestampPeriod) *
-            1e-9;
-
-        // Account for clock drift.
-        gpuTimestampS += lastGpuSyncDiffS + gpuSyncDriftSlope * (gpuTimestampS - lastGpuSyncTimeS);
-
-        // Generate the trace now that the GPU timestamp is available and clock drifts are
-        // accounted for.
-        static long long eventId = 1;
-        static const unsigned char *categoryEnabled =
-            TRACE_EVENT_API_GET_CATEGORY_ENABLED(platform, "gpu.angle.gpu");
-        platform->addTraceEvent(platform, gpuEvent.phase, categoryEnabled, gpuEvent.name.data(),
-                                eventId++, gpuTimestampS, 0, nullptr, nullptr, nullptr,
-                                TRACE_EVENT_FLAG_NONE);
-    }
-
-    mGpuEvents.clear();
 }
 
 void ContextVk::clearAllGarbage()
@@ -5928,8 +5588,9 @@ angle::Result ContextVk::syncState(const gl::Context *context,
                     (currentRPCommandCount >= kMinCommandCountToSubmit ||
                      allowExceptionForSubmitAtBoundary);
 
+                // If we are using tile memory, don't enable this optimization to prevent fallback.
                 if ((shouldSubmitAtFBOBoundary || mState.getDrawFramebuffer()->isDefault()) &&
-                    mRenderPassCommands->started())
+                    mRenderPassCommands->started() && mImagesWithTileMemory.empty())
                 {
                     // This will behave as if user called glFlush, but the actual flush will be
                     // triggered at endRenderPass time.
@@ -7911,13 +7572,6 @@ angle::Result ContextVk::flushAndSubmitCommands(const vk::Semaphore *signalSemap
         mIsAnyHostVisibleBufferWritten = false;
     }
 
-    if (mGpuEventsEnabled)
-    {
-        EventName eventName = GetTraceEventName("Primary", mPrimaryBufferEventCounter);
-        ANGLE_TRY(traceGpuEvent(&mOutsideRenderPassCommands->getCommandBuffer(),
-                                TRACE_EVENT_PHASE_END, eventName));
-    }
-
     // This will handle any commands that might be recorded above as well as flush any wait
     // semaphores.
     ANGLE_TRY(flushOutsideRenderPassCommands());
@@ -7958,15 +7612,6 @@ angle::Result ContextVk::flushAndSubmitCommands(const vk::Semaphore *signalSemap
     mHasAnyCommandsPendingSubmission    = false;
     onRenderPassFinished(RenderPassClosureReason::AlreadySpecifiedElsewhere);
 
-    if (mGpuEventsEnabled)
-    {
-        EventName eventName = GetTraceEventName("Primary", ++mPrimaryBufferEventCounter);
-        ANGLE_TRY(traceGpuEvent(&mOutsideRenderPassCommands->getCommandBuffer(),
-                                TRACE_EVENT_PHASE_BEGIN, eventName));
-    }
-
-    // Since we just flushed, deferred flush is no longer deferred.
-    mHasDeferredFlush = false;
     return angle::Result::Continue;
 }
 
@@ -7982,22 +7627,6 @@ angle::Result ContextVk::finishImpl(QueueSubmitReason queueSubmitReason)
     ANGLE_TRY(mRenderer->finishResourceUse(this, mSubmittedResourceUse));
 
     clearAllGarbage();
-
-    if (mGpuEventsEnabled)
-    {
-        // This loop should in practice execute once since the queue is already idle.
-        while (mInFlightGpuEventQueries.size() > 0)
-        {
-            ANGLE_TRY(checkCompletedGpuEvents());
-        }
-        // Recalculate the CPU/GPU time difference to account for clock drifting.  Avoid
-        // unnecessary synchronization if there is no event to be adjusted (happens when
-        // finish() gets called multiple times towards the end of the application).
-        if (mGpuEvents.size() > 0)
-        {
-            ANGLE_TRY(synchronizeCpuGpuTime());
-        }
-    }
 
     syncObjectPerfCounters(mRenderer->getCommandQueuePerfCounters());
 
@@ -8167,9 +7796,12 @@ angle::Result ContextVk::beginNewRenderPass(
     const vk::PackedClearValuesArray &clearValues,
     vk::RenderPassCommandBuffer **commandBufferOut)
 {
-    // End any currently outstanding render pass. The render pass is normally closed before reaching
-    // here for various reasons, except typically when UtilsVk needs to start one.
-    ANGLE_TRY(flushCommandsAndEndRenderPass(RenderPassClosureReason::NewRenderPass));
+    if (mRenderPassCommands->started())
+    {
+        // End any currently outstanding render pass. The render pass is normally closed before
+        // reaching here for various reasons, except typically when UtilsVk needs to start one.
+        ANGLE_TRY(flushCommandsAndEndRenderPass(RenderPassClosureReason::NewRenderPass));
+    }
 
     // Now generate queueSerial for the renderPass.
     QueueSerial renderPassQueueSerial;
@@ -8282,14 +7914,6 @@ angle::Result ContextVk::flushCommandsAndEndRenderPassWithoutSubmit(RenderPassCl
 
     onRenderPassFinished(reason);
 
-    if (mGpuEventsEnabled)
-    {
-        EventName eventName = GetTraceEventName("RP", mPerfCounters.renderPasses);
-        ANGLE_TRY(traceGpuEvent(&mOutsideRenderPassCommands->getCommandBuffer(),
-                                TRACE_EVENT_PHASE_BEGIN, eventName));
-        ANGLE_TRY(flushOutsideRenderPassCommands());
-    }
-
     addOverlayUsedBuffersCount(mRenderPassCommands);
 
     pauseTransformFeedbackIfActiveUnpaused();
@@ -8352,14 +7976,6 @@ angle::Result ContextVk::flushCommandsAndEndRenderPassWithoutSubmit(RenderPassCl
 
     // Generate a new serial for outside commands.
     generateOutsideRenderPassCommandsQueueSerial();
-
-    if (mGpuEventsEnabled)
-    {
-        EventName eventName = GetTraceEventName("RP", mPerfCounters.renderPasses);
-        ANGLE_TRY(traceGpuEvent(&mOutsideRenderPassCommands->getCommandBuffer(),
-                                TRACE_EVENT_PHASE_END, eventName));
-        ANGLE_TRY(flushOutsideRenderPassCommands());
-    }
 
     mHasAnyCommandsPendingSubmission = true;
     return angle::Result::Continue;
@@ -8686,6 +8302,7 @@ angle::Result ContextVk::beginRenderPassQuery(QueryVk *queryVk)
 
     ASSERT(mActiveRenderPassQueries[type] == nullptr);
     mActiveRenderPassQueries[type] = queryVk;
+    mActiveRenderPassQueryBitmask.set(type);
 
     return angle::Result::Continue;
 }
@@ -8722,6 +8339,7 @@ angle::Result ContextVk::endRenderPassQuery(QueryVk *queryVk)
 
     ASSERT(mActiveRenderPassQueries[type] == queryVk);
     mActiveRenderPassQueries[type] = nullptr;
+    mActiveRenderPassQueryBitmask.reset(type);
 
     return angle::Result::Continue;
 }
@@ -8806,6 +8424,8 @@ bool ContextVk::isEmulatingRasterizerDiscardDuringPrimitivesGeneratedQuery(
 
 QueryVk *ContextVk::getActiveRenderPassQuery(gl::QueryType queryType) const
 {
+    ASSERT(mActiveRenderPassQueryBitmask[queryType] ==
+           (mActiveRenderPassQueries[queryType] != nullptr));
     return mActiveRenderPassQueries[queryType];
 }
 
@@ -9429,5 +9049,122 @@ angle::Result ContextVk::onVertexArrayChange(const gl::AttributesMask dirtyAttri
 
     mGraphicsDirtyBits.set(DIRTY_BIT_VERTEX_BUFFERS);
     return angle::Result::Continue;
+}
+
+void ContextVk::addImageWithTileMemory(vk::ImageHelper *imageToAdd)
+{
+    ASSERT(imageToAdd->useTileMemory());
+    if (std::find(mImagesWithTileMemory.begin(), mImagesWithTileMemory.end(), imageToAdd) !=
+        mImagesWithTileMemory.end())
+    {
+        // Already added.
+        return;
+    }
+
+    // If this is first time added, it must have no valid data
+    ASSERT(!imageToAdd->isVkImageContentDefined());
+
+    if (getFeatures().supportsTileMemoryHeap.enabled)
+    {
+        mOutsideRenderPassCommands->getCommandBuffer().bindTileMemory(
+            imageToAdd->getDeviceMemory());
+    }
+
+    mImagesWithTileMemory.emplace_back(imageToAdd);
+}
+
+void ContextVk::removeImageWithTileMemory(const vk::ImageHelper *imageToRemove)
+{
+    ASSERT(imageToRemove->useTileMemory());
+    auto iter =
+        std::find(mImagesWithTileMemory.begin(), mImagesWithTileMemory.end(), imageToRemove);
+    if (iter != mImagesWithTileMemory.end())
+    {
+        mImagesWithTileMemory.erase(iter);
+    }
+}
+
+bool ContextVk::isImageWithTileMemoryFinalized(const vk::ImageHelper *image) const
+{
+    ASSERT(image->useTileMemory());
+    return std::find(mImagesWithTileMemory.begin(), mImagesWithTileMemory.end(), image) ==
+           mImagesWithTileMemory.end();
+}
+
+angle::Result ContextVk::finalizeImagesWithTileMemory()
+{
+    ASSERT(!mImagesWithTileMemory.empty());
+
+    // Check all images with tile memory to see if they have valid content or not. tile memory are
+    // transient, we must reallocate to keep data valid across command buffer boundary.
+    for (auto iter = mImagesWithTileMemory.begin(); iter != mImagesWithTileMemory.end();)
+    {
+        vk::ImageHelper *image = *iter;
+        // Other context may have submitted command buffer and causes it fallback already, so check
+        // again.
+        if (image->isVkImageContentDefined() && image->useTileMemory())
+        {
+            ANGLE_TRY(image->fallbackFromTileMemory(this));
+            ASSERT(!image->useTileMemory());
+            iter = mImagesWithTileMemory.erase(iter);
+        }
+        else
+        {
+            ++iter;
+        }
+    }
+
+    if (getFeatures().supportsTileMemoryHeap.enabled)
+    {
+        // We dont explicitly unbind tileMemory here. They occur implicitly at endCommandBiuffer
+        // time
+    }
+    else
+    {
+        ASSERT(getFeatures().simulateTileMemoryForTesting.enabled);
+
+        // clear VkImage to simulate the transient nature of tile memory
+        UtilsVk::ClearTextureParameters params = {};
+        params.level                           = vk::LevelIndex(0);
+        params.layer                           = 0;
+        params.clearValue                      = {};
+        params.clearArea                       = gl::Box(0, 0, 0, 0, 0, 1);
+        for (vk::ImageHelper *image : mImagesWithTileMemory)
+        {
+            // Other context may have triggered fallback already, so check
+            // again.
+            if (image->useTileMemory() && !image->isVkImageContentDefined())
+            {
+                params.aspectFlags      = image->getAspectFlags();
+                params.clearArea.width  = image->getExtents().width;
+                params.clearArea.height = image->getExtents().height;
+                ANGLE_TRY(mUtils.clearTextureNoFlush(this, image, params));
+
+                // Since this may called from submitCommands, use no submit version to avoid
+                // recursion.
+                ANGLE_TRY(flushCommandsAndEndRenderPassWithoutSubmit(
+                    RenderPassClosureReason::TileMemorySimulatedClear));
+                ASSERT(mLastFlushedQueueSerial > mLastSubmittedQueueSerial);
+
+                // clearTextureNoFlush may have set content valid again, remove the bits to keep
+                // content as invalid.
+                image->invalidateEntireLevelContent(this, gl::LevelIndex(0));
+                image->invalidateEntireLevelStencilContent(this, gl::LevelIndex(0));
+            }
+        }
+    }
+
+    mImagesWithTileMemory.clear();
+
+    return angle::Result::Continue;
+}
+
+void ContextVk::restoreAllGraphicsState()
+{
+    // Recover states that may have been changed by UtilsVk::depthStencilBlitResolve. We dirty all
+    // states except DIRTY_BIT_RENDER_PASS so that render pass could still reused.
+    DirtyBits allDrawStateDirtyBits =
+        mNewGraphicsCommandBufferDirtyBits & ~DirtyBits{DIRTY_BIT_RENDER_PASS};
+    mGraphicsDirtyBits |= allDrawStateDirtyBits;
 }
 }  // namespace rx

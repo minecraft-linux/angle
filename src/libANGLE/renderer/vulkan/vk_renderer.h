@@ -552,6 +552,8 @@ class Renderer : angle::NonCopyable
     }
     size_t getStagingBufferAlignment() const { return mStagingBufferAlignment; }
 
+    uint32_t getTileMemoyTypeIndex() const { return mTileMemoyTypeIndex; }
+
     uint32_t getVertexConversionBufferMemoryTypeIndex(MemoryHostVisibility hostVisibility) const
     {
         return hostVisibility == MemoryHostVisibility::Visible
@@ -933,6 +935,7 @@ class Renderer : angle::NonCopyable
     VkPhysicalDeviceShaderAtomicInt64Features mShaderAtomicInt64Features;
     VkPhysicalDeviceTileMemoryHeapFeaturesQCOM mTileMemoryHeapFeatures;
     VkPhysicalDeviceTileMemoryHeapPropertiesQCOM mTileMemoryHeapProperties;
+    VkPhysicalDeviceTextureCompressionASTC3DFeaturesEXT mTextureCompressionASTC3DFeatures;
 
     uint32_t mLegacyDitheringVersion = 0;
 
@@ -977,6 +980,7 @@ class Renderer : angle::NonCopyable
     vk::ImageMemorySuballocator mImageMemorySuballocator;
 
     vk::MemoryProperties mMemoryProperties;
+    uint32_t mTileMemoyTypeIndex;
     VkDeviceSize mPreferredInitialBufferBlockSize;
     VkDeviceSize mPreferredLargeHeapBlockSize;
 

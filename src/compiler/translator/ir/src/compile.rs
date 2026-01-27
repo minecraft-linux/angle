@@ -91,6 +91,13 @@ mod ffi {
         // enum equivalent to ShShaderOutput should be used to instead indicate what the _output_
         // version is, not the input.
         is_es1: bool,
+
+        // Whether uninitialized local and global variables should be zero-initialized.
+        initialize_uninitialized_variables: bool,
+        // Whether loops can be used when zero-initializing variables.
+        loops_allowed_when_initializing_variables: bool,
+        // Whether non-const variables in global scope can have an initializer
+        initializer_allowed_on_non_constant_global_variables: bool,
         // TODO(http://anglebug.com/349994211): equivalent to ShCompileOptions flags
     }
 
@@ -178,6 +185,21 @@ fn common_transforms(ir: &mut IR, options: &Options) {
             || options.extensions.EXT_shader_framebuffer_fetch_non_coherent)
     {
         transform::remove_unused_framebuffer_fetch::run(ir);
+    }
+
+    // Basic dead-code-elimination to avoid outputting variables, constants and types that are not
+    // used by the shader.
+    transform::prune_unused_variables::run(ir);
+
+    // Run after unused variables are removed, initialize local and output variables if necessary.
+    if options.initialize_uninitialized_variables {
+        let transform_options = transform::initialize_uninitialized_variables::Options {
+            loops_allowed_when_initializing_variables: options
+                .loops_allowed_when_initializing_variables,
+            initializer_allowed_on_non_constant_global_variables: options
+                .initializer_allowed_on_non_constant_global_variables,
+        };
+        transform::initialize_uninitialized_variables::run(ir, &transform_options);
     }
 }
 
