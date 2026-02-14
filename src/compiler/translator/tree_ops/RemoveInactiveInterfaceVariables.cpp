@@ -71,7 +71,7 @@ bool IsVariableActive(const std::vector<Variable> &mVars, const ImmutableString 
             return var.active;
         }
     }
-    UNREACHABLE();
+    ASSERT(false);
     return true;
 }
 
@@ -128,7 +128,7 @@ bool RemoveInactiveInterfaceVariablesTraverser::visitDeclaration(Visit visit,
     {
         removeDeclaration = !IsVariableActive(mInputVaryings, asSymbol->getName());
     }
-    else if (qualifier == EvqFragmentOut)
+    else if (qualifier == EvqFragmentOut || qualifier == EvqFragmentInOut)
     {
         removeDeclaration =
             !IsVariableActive(mOutputVariables, asSymbol->getName()) && mRemoveFragmentOutputs;

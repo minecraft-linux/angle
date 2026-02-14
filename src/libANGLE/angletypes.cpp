@@ -4,7 +4,12 @@
 // found in the LICENSE file.
 //
 
-// angletypes.h : Defines a variety of structures and enum types that are used throughout libGLESv2
+// angletypes.cpp : Defines a variety of structures and enum types that are used throughout
+// libGLESv2
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/angletypes.h"
 #include "libANGLE/Program.h"
@@ -376,6 +381,94 @@ ImageUnit::ImageUnit()
 ImageUnit::ImageUnit(const ImageUnit &other) = default;
 
 ImageUnit::~ImageUnit() = default;
+
+namespace
+{
+// Conversion functions between indices in the SupportedSampleSet bitfield and actual sample count.
+// The first bit stores the '0' sample count, bits 1 though N store each power-of-two sample count.
+size_t SampleCountToBitfieldIndex(GLuint sampleCount)
+{
+    if (sampleCount == 0)
+    {
+        return 0;
+    }
+
+    ASSERT(isPow2(sampleCount));
+    return log2(sampleCount) + 1;
+}
+
+GLuint BitfieldIndexToSampleCount(size_t bitfieldIndex)
+{
+    if (bitfieldIndex == 0)
+    {
+        return 0;
+    }
+
+    return 1 << (bitfieldIndex - 1);
+}
+}  // namespace
+
+void SupportedSampleSet::insert(GLuint sampleCount)
+{
+    mSupportedSamples.set(SampleCountToBitfieldIndex(sampleCount));
+}
+
+void SupportedSampleSet::clear()
+{
+    mSupportedSamples.reset();
+}
+
+GLuint SupportedSampleSet::getNearestSamples(GLuint requestedSamples) const
+{
+    if (requestedSamples == 0)
+    {
+        return 0;
+    }
+
+    for (size_t sampleIndex : mSupportedSamples)
+    {
+        GLuint sampleCount = BitfieldIndexToSampleCount(sampleIndex);
+        if (sampleCount >= requestedSamples)
+        {
+            return sampleCount;
+        }
+    }
+
+    return 0;
+}
+
+GLuint SupportedSampleSet::getMaxSamples() const
+{
+    if (!mSupportedSamples.any())
+    {
+        return 0;
+    }
+
+    return BitfieldIndexToSampleCount(mSupportedSamples.last());
+}
+
+size_t SupportedSampleSet::size() const
+{
+    return mSupportedSamples.count();
+}
+
+std::vector<GLint> SupportedSampleSet::sampleCounts() const
+{
+    std::vector<GLint> sampleCounts;
+    sampleCounts.reserve(size());
+    for (size_t sampleIndex : mSupportedSamples)
+    {
+        sampleCounts.push_back(BitfieldIndexToSampleCount(sampleIndex));
+    }
+    return sampleCounts;
+}
+
+SupportedSampleSet SupportedSampleSet::operator&(const SupportedSampleSet &other) const
+{
+    SupportedSampleSet result;
+    result.mSupportedSamples = mSupportedSamples & other.mSupportedSamples;
+    return result;
+}
 
 BlendStateExt::BlendStateExt(const size_t drawBufferCount)
     : mParameterMask(FactorStorage::GetMask(drawBufferCount)),
@@ -995,10 +1088,10 @@ void Box::extend(const Box &other)
     depth  = z1 - z0;
 }
 
-bool ValidateComponentTypeMasks(unsigned long outputTypes,
-                                unsigned long inputTypes,
-                                unsigned long outputMask,
-                                unsigned long inputMask)
+bool ValidateComponentTypeMasks(uint64_t outputTypes,
+                                uint64_t inputTypes,
+                                uint64_t outputMask,
+                                uint64_t inputMask)
 {
     static_assert(IMPLEMENTATION_MAX_DRAW_BUFFERS <= kMaxComponentTypeMaskIndex,
                   "Output/input masks should fit into 16 bits - 1 bit per draw buffer. The "

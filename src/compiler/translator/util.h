@@ -29,7 +29,7 @@ class TIntermDeclaration;
 class TSymbolTable;
 class TIntermTyped;
 
-float NumericLexFloat32OutOfRangeToInfinity(const std::string &str);
+float NumericLexFloat32OutOfRangeToInfinity(const std::string &str, bool preserveDenorms);
 
 // strtof_clamp is like strtof but
 //   1. it forces C locale, i.e. forcing '.' as decimal point.
@@ -37,10 +37,13 @@ float NumericLexFloat32OutOfRangeToInfinity(const std::string &str);
 //   3. str should be guaranteed to be in the valid format for a floating point number as defined
 //      by the grammar in the ESSL 3.00.6 spec section 4.1.4.
 // Return false if overflow happens.
-bool strtof_clamp(const std::string &str, float *value);
+bool strtof_clamp(const std::string &str, float *value, bool preserveDenorms);
 
 GLenum GLVariableType(const TType &type);
 GLenum GLVariablePrecision(const TType &type);
+bool IsParam(TQualifier qualifier);
+// Returns true if `out` or `inout` function parameter.
+bool IsParamOut(TQualifier qualifier);
 bool IsVaryingIn(TQualifier qualifier);
 bool IsVaryingOut(TQualifier qualifier);
 bool IsVarying(TQualifier qualifier);
@@ -56,7 +59,10 @@ InterpolationType GetFieldInterpolationType(TQualifier qualifier);
 // 3.10 section 4.1.9.
 ImmutableString ArrayString(const TType &type);
 
-ImmutableString GetTypeName(const TType &type, ShHashFunction64 hashFunction, NameMap *nameMap);
+ImmutableString GetTypeName(const TType &type,
+                            char prefix,
+                            ShHashFunction64 hashFunction,
+                            NameMap *nameMap);
 
 TType GetShaderVariableBasicType(const sh::ShaderVariable &var);
 
@@ -100,6 +106,9 @@ struct Declaration
 // Returns a `Declaration` view of the given node, for declarator `index` of
 // the declarations in `declNode`.
 Declaration ViewDeclaration(TIntermDeclaration &declNode, uint32_t index = 0);
+
+// Returns true if op indexes an array, struct, or interface block.
+bool IsIndexOp(TOperator op);
 
 }  // namespace sh
 

@@ -6,6 +6,10 @@
 
 // queryutils.cpp: Utilities for querying values from GL objects
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/queryutils.h"
 
 #include <algorithm>
@@ -21,6 +25,7 @@
 #include "libANGLE/Framebuffer.h"
 #include "libANGLE/GLES1State.h"
 #include "libANGLE/MemoryObject.h"
+#include "libANGLE/PixelLocalStorage.h"
 #include "libANGLE/Program.h"
 #include "libANGLE/Renderbuffer.h"
 #include "libANGLE/Sampler.h"
@@ -392,6 +397,9 @@ void QueryTexParameterBase(const Context *context,
             *params = CastFromGLintStateValue<ParamType>(pname,
                                                          texture->getImageCompressionRate(context));
             break;
+        case GL_TEXTURE_ASTC_DECODE_PRECISION_EXT:
+            *params = CastFromGLintStateValue<ParamType>(pname, texture->getASTCDecodePrecision());
+            break;
         default:
             UNREACHABLE();
             break;
@@ -517,6 +525,9 @@ void SetTexParameterBase(Context *context, Texture *texture, GLenum pname, const
         case GL_TEXTURE_FOVEATED_MIN_PIXEL_DENSITY_QCOM:
             texture->setMinPixelDensity(ConvertToGLfloat(params[0]));
             break;
+        case GL_TEXTURE_ASTC_DECODE_PRECISION_EXT:
+            texture->setASTCDecodePrecision(context, ConvertToGLenum(pname, params[0]));
+            break;
         default:
             UNREACHABLE();
             break;
@@ -626,6 +637,7 @@ void SetSamplerParameterBase(Context *context,
 template <typename ParamType, typename CurrentDataType, size_t CurrentValueCount>
 void QueryVertexAttribBase(const VertexAttribute &attrib,
                            const VertexBinding &binding,
+                           const Buffer *buffer,
                            const CurrentDataType (&currentValueData)[CurrentValueCount],
                            GLenum pname,
                            ParamType *params)
@@ -656,7 +668,7 @@ void QueryVertexAttribBase(const VertexAttribute &attrib,
                 CastFromStateValue<ParamType>(pname, static_cast<GLint>(attrib.format->isNorm()));
             break;
         case GL_VERTEX_ATTRIB_ARRAY_BUFFER_BINDING:
-            *params = CastFromGLintStateValue<ParamType>(pname, binding.getBuffer().id().value);
+            *params = CastFromGLintStateValue<ParamType>(pname, buffer ? buffer->id().value : 0);
             break;
         case GL_VERTEX_ATTRIB_ARRAY_DIVISOR:
             *params = CastFromStateValue<ParamType>(pname, binding.getDivisor());
@@ -1041,7 +1053,7 @@ template <typename ShaderVariableT>
 void GetShaderVariableBufferResourceProperty(const ShaderVariableT &buffer,
                                              GLenum pname,
                                              GLint *params,
-                                             GLsizei bufSize,
+                                             GLsizei count,
                                              GLsizei *outputPosition)
 
 {
@@ -1055,7 +1067,7 @@ void GetShaderVariableBufferResourceProperty(const ShaderVariableT &buffer,
             break;
         case GL_ACTIVE_VARIABLES:
             for (size_t memberIndex = 0;
-                 memberIndex < buffer.memberIndexes.size() && *outputPosition < bufSize;
+                 memberIndex < buffer.memberIndexes.size() && *outputPosition < count;
                  ++memberIndex)
             {
                 params[(*outputPosition)++] = clampCast<GLint>(buffer.memberIndexes[memberIndex]);
@@ -1090,7 +1102,7 @@ void GetShaderVariableBufferResourceProperty(const ShaderVariableT &buffer,
 void GetInterfaceBlockResourceProperty(const InterfaceBlock &block,
                                        GLenum pname,
                                        GLint *params,
-                                       GLsizei bufSize,
+                                       GLsizei count,
                                        GLsizei *outputPosition)
 {
     if (pname == GL_NAME_LENGTH)
@@ -1098,18 +1110,18 @@ void GetInterfaceBlockResourceProperty(const InterfaceBlock &block,
         params[(*outputPosition)++] = clampCast<GLint>(block.nameWithArrayIndex().size() + 1);
         return;
     }
-    GetShaderVariableBufferResourceProperty(block, pname, params, bufSize, outputPosition);
+    GetShaderVariableBufferResourceProperty(block, pname, params, count, outputPosition);
 }
 
 void GetUniformBlockResourceProperty(const Program *program,
                                      GLuint blockIndex,
                                      GLenum pname,
                                      GLint *params,
-                                     GLsizei bufSize,
+                                     GLsizei count,
                                      GLsizei *outputPosition)
 
 {
-    ASSERT(*outputPosition < bufSize);
+    ASSERT(*outputPosition < count);
 
     if (pname == GL_BUFFER_BINDING)
     {
@@ -1118,18 +1130,18 @@ void GetUniformBlockResourceProperty(const Program *program,
     }
 
     const auto &block = program->getExecutable().getUniformBlockByIndex(blockIndex);
-    GetInterfaceBlockResourceProperty(block, pname, params, bufSize, outputPosition);
+    GetInterfaceBlockResourceProperty(block, pname, params, count, outputPosition);
 }
 
 void GetShaderStorageBlockResourceProperty(const Program *program,
                                            GLuint blockIndex,
                                            GLenum pname,
                                            GLint *params,
-                                           GLsizei bufSize,
+                                           GLsizei count,
                                            GLsizei *outputPosition)
 
 {
-    ASSERT(*outputPosition < bufSize);
+    ASSERT(*outputPosition < count);
 
     if (pname == GL_BUFFER_BINDING)
     {
@@ -1139,18 +1151,18 @@ void GetShaderStorageBlockResourceProperty(const Program *program,
     }
 
     const auto &block = program->getExecutable().getShaderStorageBlockByIndex(blockIndex);
-    GetInterfaceBlockResourceProperty(block, pname, params, bufSize, outputPosition);
+    GetInterfaceBlockResourceProperty(block, pname, params, count, outputPosition);
 }
 
 void GetAtomicCounterBufferResourceProperty(const Program *program,
                                             GLuint index,
                                             GLenum pname,
                                             GLint *params,
-                                            GLsizei bufSize,
+                                            GLsizei count,
                                             GLsizei *outputPosition)
 
 {
-    ASSERT(*outputPosition < bufSize);
+    ASSERT(*outputPosition < count);
 
     if (pname == GL_BUFFER_BINDING)
     {
@@ -1159,7 +1171,7 @@ void GetAtomicCounterBufferResourceProperty(const Program *program,
     }
 
     const auto &buffer = program->getExecutable().getAtomicCounterBuffers()[index];
-    GetShaderVariableBufferResourceProperty(buffer, pname, params, bufSize, outputPosition);
+    GetShaderVariableBufferResourceProperty(buffer, pname, params, count, outputPosition);
 }
 
 bool IsTextureEnvEnumParameter(TextureEnvParameter pname)
@@ -1375,6 +1387,7 @@ void QueryProgramiv(Context *context, Program *program, GLenum pname, GLint *par
         case GL_COMPLETION_STATUS_KHR:
             if (context->isContextLost())
             {
+                context->contextLostErrorOnBlockingCall(angle::EntryPoint::GLGetProgramiv);
                 *params = GL_TRUE;
             }
             else
@@ -1513,7 +1526,9 @@ void QueryRenderbufferiv(const Context *context,
             }
             else
             {
-                *params = renderbuffer->getFormat().info->internalFormat;
+                *params = (renderbuffer->getFormat().info->internalFormat == GL_NONE)
+                              ? GL_RGBA4
+                              : renderbuffer->getFormat().info->internalFormat;
             }
             break;
         case GL_RENDERBUFFER_RED_SIZE:
@@ -1573,6 +1588,7 @@ void QueryShaderiv(const Context *context, Shader *shader, GLenum pname, GLint *
         case GL_COMPLETION_STATUS_KHR:
             if (context->isContextLost())
             {
+                context->contextLostErrorOnBlockingCall(angle::EntryPoint::GLGetShaderiv);
                 *params = GL_TRUE;
             }
             else
@@ -1675,20 +1691,24 @@ void QuerySamplerParameterIuiv(const Sampler *sampler, GLenum pname, GLuint *par
 
 void QueryVertexAttribfv(const VertexAttribute &attrib,
                          const VertexBinding &binding,
+                         const Buffer *buffer,
                          const VertexAttribCurrentValueData &currentValueData,
                          GLenum pname,
                          GLfloat *params)
 {
-    QueryVertexAttribBase(attrib, binding, currentValueData.Values.FloatValues, pname, params);
+    QueryVertexAttribBase(attrib, binding, buffer, currentValueData.Values.FloatValues, pname,
+                          params);
 }
 
 void QueryVertexAttribiv(const VertexAttribute &attrib,
                          const VertexBinding &binding,
+                         const Buffer *buffer,
                          const VertexAttribCurrentValueData &currentValueData,
                          GLenum pname,
                          GLint *params)
 {
-    QueryVertexAttribBase(attrib, binding, currentValueData.Values.FloatValues, pname, params);
+    QueryVertexAttribBase(attrib, binding, buffer, currentValueData.Values.FloatValues, pname,
+                          params);
 }
 
 void QueryVertexAttribPointerv(const VertexAttribute &attrib, GLenum pname, void **pointer)
@@ -1707,20 +1727,23 @@ void QueryVertexAttribPointerv(const VertexAttribute &attrib, GLenum pname, void
 
 void QueryVertexAttribIiv(const VertexAttribute &attrib,
                           const VertexBinding &binding,
+                          const Buffer *buffer,
                           const VertexAttribCurrentValueData &currentValueData,
                           GLenum pname,
                           GLint *params)
 {
-    QueryVertexAttribBase(attrib, binding, currentValueData.Values.IntValues, pname, params);
+    QueryVertexAttribBase(attrib, binding, buffer, currentValueData.Values.IntValues, pname,
+                          params);
 }
 
 void QueryVertexAttribIuiv(const VertexAttribute &attrib,
                            const VertexBinding &binding,
+                           const Buffer *buffer,
                            const VertexAttribCurrentValueData &currentValueData,
                            GLenum pname,
                            GLuint *params)
 {
-    QueryVertexAttribBase(attrib, binding, currentValueData.Values.UnsignedIntValues, pname,
+    QueryVertexAttribBase(attrib, binding, buffer, currentValueData.Values.UnsignedIntValues, pname,
                           params);
 }
 
@@ -1739,22 +1762,25 @@ void QueryInternalFormativ(const Context *context,
                            GLenum internalformat,
                            const TextureCaps &format,
                            GLenum pname,
-                           GLsizei bufSize,
+                           GLsizei count,
                            GLint *params)
 {
+    if (count < 1)
+    {
+        return;
+    }
+
     switch (pname)
     {
         case GL_NUM_SAMPLE_COUNTS:
-            if (bufSize != 0)
-            {
-                *params = clampCast<GLint>(format.sampleCounts.size());
-            }
+            *params = clampCast<GLint>(format.sampleCounts.size());
             break;
 
         case GL_SAMPLES:
         {
-            size_t returnCount   = std::min<size_t>(bufSize, format.sampleCounts.size());
-            auto sampleReverseIt = format.sampleCounts.rbegin();
+            size_t returnCount   = std::min<size_t>(count, format.sampleCounts.size());
+            auto sampleCounts    = format.sampleCounts.sampleCounts();
+            auto sampleReverseIt = sampleCounts.rbegin();
             for (size_t sampleIndex = 0; sampleIndex < returnCount; ++sampleIndex)
             {
                 params[sampleIndex] = *sampleReverseIt++;
@@ -1766,15 +1792,14 @@ void QueryInternalFormativ(const Context *context,
             if (texture != nullptr)
             {
                 *params = texture->getFormatSupportedCompressionRates(context, internalformat,
-                                                                      bufSize, nullptr);
+                                                                      count, nullptr);
             }
             break;
 
         case GL_SURFACE_COMPRESSION_EXT:
             if (texture != nullptr)
             {
-                texture->getFormatSupportedCompressionRates(context, internalformat, bufSize,
-                                                            params);
+                texture->getFormatSupportedCompressionRates(context, internalformat, count, params);
             }
             break;
 
@@ -1814,17 +1839,112 @@ void QueryFramebufferParameteriv(const Framebuffer *framebuffer, GLenum pname, G
     }
 }
 
+template <typename ParamType>
+void QueryFramebufferPixelLocalStorageParameterBase(Context *context,
+                                                    GLint plane,
+                                                    GLenum pname,
+                                                    GLsizei *length,
+                                                    ParamType *params)
+{
+    const PixelLocalStoragePlane &planeObject =
+        context->getState().getDrawFramebuffer()->getPixelLocalStorage(context).getPlane(plane);
+    switch (pname)
+    {
+        case GL_PIXEL_LOCAL_FORMAT_ANGLE:
+        case GL_PIXEL_LOCAL_TEXTURE_NAME_ANGLE:
+        case GL_PIXEL_LOCAL_TEXTURE_LEVEL_ANGLE:
+        case GL_PIXEL_LOCAL_TEXTURE_LAYER_ANGLE:
+            if (length != nullptr)
+            {
+                *length = 1;
+            }
+            *params = clampCast<ParamType>(planeObject.getIntegeri(pname));
+            break;
+        case GL_PIXEL_LOCAL_CLEAR_VALUE_FLOAT_ANGLE:
+        {
+            if (length != nullptr)
+            {
+                *length = 4;
+            }
+            GLfloat p[4];
+            planeObject.getClearValuef(p);
+            params[0] = clampCast<ParamType>(p[0]);
+            params[1] = clampCast<ParamType>(p[1]);
+            params[2] = clampCast<ParamType>(p[2]);
+            params[3] = clampCast<ParamType>(p[3]);
+            break;
+        }
+        case GL_PIXEL_LOCAL_CLEAR_VALUE_INT_ANGLE:
+        {
+            if (length != nullptr)
+            {
+                *length = 4;
+            }
+            GLint p[4];
+            planeObject.getClearValuei(p);
+            params[0] = clampCast<ParamType>(p[0]);
+            params[1] = clampCast<ParamType>(p[1]);
+            params[2] = clampCast<ParamType>(p[2]);
+            params[3] = clampCast<ParamType>(p[3]);
+            break;
+        }
+        case GL_PIXEL_LOCAL_CLEAR_VALUE_UNSIGNED_INT_ANGLE:
+        {
+            if (length != nullptr)
+            {
+                *length = 4;
+            }
+            // There is no unsigned int PLS state query
+            if constexpr (std::numeric_limits<ParamType>::is_integer)
+            {
+                planeObject.getClearValueui(reinterpret_cast<GLuint *>(params));
+            }
+            else
+            {
+                GLuint p[4];
+                planeObject.getClearValueui(p);
+                params[0] = clampCast<ParamType>(p[0]);
+                params[1] = clampCast<ParamType>(p[1]);
+                params[2] = clampCast<ParamType>(p[2]);
+                params[3] = clampCast<ParamType>(p[3]);
+            }
+            break;
+        }
+        default:
+            UNREACHABLE();
+            break;
+    }
+}
+
+void QueryFramebufferPixelLocalStorageParameterfv(Context *context,
+                                                  GLint plane,
+                                                  GLenum pname,
+                                                  GLsizei *length,
+                                                  GLfloat *params)
+{
+    QueryFramebufferPixelLocalStorageParameterBase(context, plane, pname, length, params);
+}
+
+void QueryFramebufferPixelLocalStorageParameteriv(Context *context,
+                                                  GLint plane,
+                                                  GLenum pname,
+                                                  GLsizei *length,
+                                                  GLint *params)
+{
+    QueryFramebufferPixelLocalStorageParameterBase(context, plane, pname, length, params);
+}
+
 angle::Result QuerySynciv(const Context *context,
                           const Sync *sync,
                           GLenum pname,
-                          GLsizei bufSize,
+                          GLsizei count,
                           GLsizei *length,
                           GLint *values)
 {
     ASSERT(sync != nullptr || pname == GL_SYNC_STATUS);
 
-    // All queries return one value, exit early if the buffer can't fit anything.
-    if (bufSize < 1)
+    // All queries return one value, exit early if the requested count is less.
+    if (count < 1)
     {
         if (length != nullptr)
         {
@@ -1847,6 +1967,7 @@ angle::Result QuerySynciv(const Context *context,
         case GL_SYNC_STATUS:
             if (context->isContextLost())
             {
+                context->contextLostErrorOnBlockingCall(angle::EntryPoint::GLGetSynciv);
                 *values = GL_SIGNALED;
             }
             else
@@ -2216,7 +2337,7 @@ void QueryProgramResourceiv(const Program *program,
                             UniformBlockIndex index,
                             GLsizei propCount,
                             const GLenum *props,
-                            GLsizei bufSize,
+                            GLsizei count,
                             GLsizei *length,
                             GLint *params)
 {
@@ -2230,9 +2351,8 @@ void QueryProgramResourceiv(const Program *program,
         *length = 0;
     }
 
-    if (bufSize == 0)
+    if (count < 1)
     {
-        // No room to write the results
         return;
     }
 
@@ -2262,18 +2382,18 @@ void QueryProgramResourceiv(const Program *program,
                 break;
 
             case GL_UNIFORM_BLOCK:
-                GetUniformBlockResourceProperty(program, index.value, props[i], params, bufSize,
+                GetUniformBlockResourceProperty(program, index.value, props[i], params, count,
                                                 &pos);
                 break;
 
             case GL_SHADER_STORAGE_BLOCK:
-                GetShaderStorageBlockResourceProperty(program, index.value, props[i], params,
-                                                      bufSize, &pos);
+                GetShaderStorageBlockResourceProperty(program, index.value, props[i], params, count,
+                                                      &pos);
                 break;
 
             case GL_ATOMIC_COUNTER_BUFFER:
                 GetAtomicCounterBufferResourceProperty(program, index.value, props[i], params,
-                                                       bufSize, &pos);
+                                                       count, &pos);
                 break;
 
             case GL_TRANSFORM_FEEDBACK_VARYING:
@@ -2286,7 +2406,7 @@ void QueryProgramResourceiv(const Program *program,
                 UNREACHABLE();
                 params[i] = GL_INVALID_VALUE;
         }
-        if (pos == bufSize)
+        if (pos == count)
         {
             // Most properties return one value, but GL_ACTIVE_VARIABLES returns an array of values.
             // This checks not to break buffer bounds for such case.
@@ -3203,7 +3323,7 @@ bool GetQueryParameterInfo(const State &glState,
 {
     const Caps &caps             = glState.getCaps();
     const Extensions &extensions = glState.getExtensions();
-    GLint clientMajorVersion     = glState.getClientMajorVersion();
+    const Version &clientVersion = glState.getClientVersion();
 
     // Please note: the query type returned for DEPTH_CLEAR_VALUE in this implementation
     // is FLOAT rather than INT, as would be suggested by the GL ES 2.0 spec. This is due
@@ -3317,7 +3437,7 @@ bool GetQueryParameterInfo(const State &glState,
         case GL_MAX_DRAW_BUFFERS_EXT:
         case GL_MAX_COLOR_ATTACHMENTS_EXT:
         {
-            if ((clientMajorVersion < 3) && !extensions.drawBuffersEXT)
+            if ((clientVersion < ES_3_0) && !extensions.drawBuffersEXT)
             {
                 return false;
             }
@@ -3327,7 +3447,7 @@ bool GetQueryParameterInfo(const State &glState,
         }
         case GL_BLEND_ADVANCED_COHERENT_KHR:
         {
-            if (clientMajorVersion < 2 || !extensions.blendEquationAdvancedCoherentKHR)
+            if (!extensions.blendEquationAdvancedCoherentKHR)
             {
                 return false;
             }
@@ -3399,7 +3519,7 @@ bool GetQueryParameterInfo(const State &glState,
         }
         case GL_COLOR_LOGIC_OP:
         {
-            if (clientMajorVersion == 1)
+            if (clientVersion < ES_2_0)
             {
                 // Handle logicOp in GLES1 through GLES1 state management.
                 break;
@@ -3503,7 +3623,7 @@ bool GetQueryParameterInfo(const State &glState,
         case GL_CLIP_DISTANCE5_EXT:
         case GL_CLIP_DISTANCE6_EXT:
         case GL_CLIP_DISTANCE7_EXT:
-            if (clientMajorVersion < 2)
+            if (clientVersion < ES_2_0)
             {
                 break;
             }
@@ -3558,6 +3678,22 @@ bool GetQueryParameterInfo(const State &glState,
                 return false;
             }
             *type      = GL_INT;
+            *numParams = 1;
+            return true;
+        case GL_SHADING_RATE_EXT:
+            if (!extensions.fragmentShadingRateEXT)
+            {
+                return false;
+            }
+            *type      = GL_INT;
+            *numParams = 1;
+            return true;
+        case GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT:
+            if (!extensions.fragmentShadingRateEXT)
+            {
+                return false;
+            }
+            *type      = GL_BOOL;
             *numParams = 1;
             return true;
     }
@@ -3685,7 +3821,7 @@ bool GetQueryParameterInfo(const State &glState,
     {
         // GL_DRAW_FRAMEBUFFER_BINDING equivalent to GL_FRAMEBUFFER_BINDING
         case GL_READ_FRAMEBUFFER_BINDING:
-            if ((clientMajorVersion < 3) && !extensions.framebufferBlitAny())
+            if ((clientVersion < ES_3_0) && !extensions.framebufferBlitAny())
             {
                 return false;
             }
@@ -3694,7 +3830,7 @@ bool GetQueryParameterInfo(const State &glState,
             return true;
 
         case GL_NUM_PROGRAM_BINARY_FORMATS_OES:
-            if ((clientMajorVersion < 3) && !extensions.getProgramBinaryOES)
+            if ((clientVersion < ES_3_0) && !extensions.getProgramBinaryOES)
             {
                 return false;
             }
@@ -3703,7 +3839,7 @@ bool GetQueryParameterInfo(const State &glState,
             return true;
 
         case GL_PROGRAM_BINARY_FORMATS_OES:
-            if ((clientMajorVersion < 3) && !extensions.getProgramBinaryOES)
+            if ((clientVersion < ES_3_0) && !extensions.getProgramBinaryOES)
             {
                 return false;
             }
@@ -3714,7 +3850,7 @@ bool GetQueryParameterInfo(const State &glState,
         case GL_PACK_ROW_LENGTH:
         case GL_PACK_SKIP_ROWS:
         case GL_PACK_SKIP_PIXELS:
-            if ((clientMajorVersion < 3) && !extensions.packSubimageNV)
+            if ((clientVersion < ES_3_0) && !extensions.packSubimageNV)
             {
                 return false;
             }
@@ -3724,7 +3860,7 @@ bool GetQueryParameterInfo(const State &glState,
         case GL_UNPACK_ROW_LENGTH:
         case GL_UNPACK_SKIP_ROWS:
         case GL_UNPACK_SKIP_PIXELS:
-            if ((clientMajorVersion < 3) && !extensions.unpackSubimageEXT)
+            if ((clientVersion < ES_3_0) && !extensions.unpackSubimageEXT)
             {
                 return false;
             }
@@ -3732,7 +3868,7 @@ bool GetQueryParameterInfo(const State &glState,
             *numParams = 1;
             return true;
         case GL_VERTEX_ARRAY_BINDING:
-            if ((clientMajorVersion < 3) && !extensions.vertexArrayObjectOES)
+            if ((clientVersion < ES_3_0) && !extensions.vertexArrayObjectOES)
             {
                 return false;
             }
@@ -3741,7 +3877,7 @@ bool GetQueryParameterInfo(const State &glState,
             return true;
         case GL_PIXEL_PACK_BUFFER_BINDING:
         case GL_PIXEL_UNPACK_BUFFER_BINDING:
-            if ((clientMajorVersion < 3) && !extensions.pixelBufferObjectNV)
+            if ((clientVersion < ES_3_0) && !extensions.pixelBufferObjectNV)
             {
                 return false;
             }
@@ -3751,7 +3887,7 @@ bool GetQueryParameterInfo(const State &glState,
         case GL_MAX_SAMPLES:
             static_assert(GL_MAX_SAMPLES_ANGLE == GL_MAX_SAMPLES,
                           "GL_MAX_SAMPLES_ANGLE not equal to GL_MAX_SAMPLES");
-            if ((clientMajorVersion < 3) && !(extensions.framebufferMultisampleANGLE ||
+            if ((clientVersion < ES_3_0) && !(extensions.framebufferMultisampleANGLE ||
                                               extensions.multisampledRenderToTextureEXT))
             {
                 return false;
@@ -3760,7 +3896,7 @@ bool GetQueryParameterInfo(const State &glState,
             *numParams = 1;
             return true;
         case GL_FRAGMENT_SHADER_DERIVATIVE_HINT:
-            if ((clientMajorVersion < 3) && !extensions.standardDerivativesOES)
+            if ((clientVersion < ES_3_0) && !extensions.standardDerivativesOES)
             {
                 return false;
             }
@@ -3768,7 +3904,7 @@ bool GetQueryParameterInfo(const State &glState,
             *numParams = 1;
             return true;
         case GL_TEXTURE_BINDING_3D:
-            if ((clientMajorVersion < 3) && !extensions.texture3DOES)
+            if ((clientVersion < ES_3_0) && !extensions.texture3DOES)
             {
                 return false;
             }
@@ -3776,7 +3912,7 @@ bool GetQueryParameterInfo(const State &glState,
             *numParams = 1;
             return true;
         case GL_MAX_3D_TEXTURE_SIZE:
-            if ((clientMajorVersion < 3) && !extensions.texture3DOES)
+            if ((clientVersion < ES_3_0) && !extensions.texture3DOES)
             {
                 return false;
             }
@@ -3796,7 +3932,7 @@ bool GetQueryParameterInfo(const State &glState,
         return true;
     }
 
-    if ((extensions.multiview2OVR || extensions.multiviewOVR) && pname == GL_MAX_VIEWS_OVR)
+    if (extensions.multiviewOVR && pname == GL_MAX_VIEWS_OVR)
     {
         *type      = GL_INT;
         *numParams = 1;
@@ -4098,7 +4234,6 @@ bool GetQueryParameterInfo(const State &glState,
         switch (pname)
         {
             case GL_MAX_PIXEL_LOCAL_STORAGE_PLANES_ANGLE:
-            case GL_MAX_COLOR_ATTACHMENTS_WITH_ACTIVE_PIXEL_LOCAL_STORAGE_ANGLE:
             case GL_MAX_COMBINED_DRAW_BUFFERS_AND_PIXEL_LOCAL_STORAGE_PLANES_ANGLE:
             case GL_PIXEL_LOCAL_STORAGE_ACTIVE_PLANES_ANGLE:
                 *type      = GL_INT;
@@ -4625,10 +4760,10 @@ void QueryContextAttrib(const gl::Context *context, EGLint attribute, EGLint *va
             break;
         case EGL_CONTEXT_MAJOR_VERSION:
             static_assert(EGL_CONTEXT_MAJOR_VERSION == EGL_CONTEXT_CLIENT_VERSION);
-            *value = context->getClientMajorVersion();
+            *value = context->getClientVersion().getMajor();
             break;
         case EGL_CONTEXT_MINOR_VERSION:
-            *value = context->getClientMinorVersion();
+            *value = context->getClientVersion().getMinor();
             break;
         case EGL_RENDER_BUFFER:
             *value = context->getRenderBuffer();
@@ -4676,7 +4811,7 @@ egl::Error QuerySurfaceAttrib(const Display *display,
             *value = surface->getConfig()->configID;
             break;
         case EGL_HEIGHT:
-            ANGLE_TRY(surface->getUserHeight(display, value));
+            ANGLE_TRY(surface->getUserSize(display, nullptr, value));
             break;
         case EGL_HORIZONTAL_RESOLUTION:
             *value = surface->getHorizontalResolution();
@@ -4739,7 +4874,7 @@ egl::Error QuerySurfaceAttrib(const Display *display,
             *value = surface->getVerticalResolution();
             break;
         case EGL_WIDTH:
-            ANGLE_TRY(surface->getUserWidth(display, value));
+            ANGLE_TRY(surface->getUserSize(display, value, nullptr));
             break;
         case EGL_POST_SUB_BUFFER_SUPPORTED_NV:
             *value = surface->isPostSubBufferSupported();
@@ -4790,7 +4925,7 @@ egl::Error QuerySurfaceAttrib(const Display *display,
             *value = surface->hasProtectedContent();
             break;
         case EGL_SURFACE_COMPRESSION_EXT:
-            *value = surface->getCompressionRate(display);
+            ANGLE_TRY(surface->getCompressionRate(display, context, value));
             break;
         default:
             UNREACHABLE();

@@ -7,8 +7,13 @@
 // renderer11_utils.h: Conversion functions and other utility routines
 // specific to the D3D11 renderer.
 
+
 #ifndef LIBANGLE_RENDERER_D3D_D3D11_RENDERER11_UTILS_H_
 #define LIBANGLE_RENDERER_D3D_D3D11_RENDERER11_UTILS_H_
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include <array>
 #include <functional>
@@ -81,8 +86,6 @@ void GenerateCaps(ID3D11Device *device,
                   gl::Extensions *extensions,
                   gl::Limitations *limitations,
                   ShPixelLocalStorageOptions *);
-
-D3D_FEATURE_LEVEL GetMinimumFeatureLevelForES31();
 
 }  // namespace d3d11_gl
 

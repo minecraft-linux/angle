@@ -36,7 +36,7 @@ InitState DetermineInitState(const Context *context)
 RenderbufferState::RenderbufferState()
     : mWidth(0),
       mHeight(0),
-      mFormat(GL_RGBA4),
+      mFormat(GL_NONE),
       mSamples(0),
       mMultisamplingMode(MultisamplingMode::Regular),
       mHasProtectedContent(false),
@@ -166,7 +166,7 @@ angle::Result Renderbuffer::setStorageMultisample(const Context *context,
 
     // Potentially adjust "samplesIn" to a supported value
     const TextureCaps &formatCaps = context->getTextureCaps().get(internalformat);
-    GLsizei samples               = formatCaps.getNearestSamples(samplesIn);
+    GLsizei samples               = formatCaps.sampleCounts.getNearestSamples(samplesIn);
 
     ANGLE_TRY(mImplementation->setStorageMultisample(context, samples, internalformat, width,
                                                      height, mode));

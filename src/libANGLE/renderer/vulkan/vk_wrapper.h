@@ -210,6 +210,10 @@ class CommandBuffer : public WrappedObject<CommandBuffer, VkCommandBuffer>
     void bindPipeline(VkPipelineBindPoint pipelineBindPoint, const Pipeline &pipeline);
 
     void bindIndexBuffer(const Buffer &buffer, VkDeviceSize offset, VkIndexType indexType);
+    void bindIndexBuffer2(const Buffer &buffer,
+                          VkDeviceSize offset,
+                          VkDeviceSize size,
+                          VkIndexType indexType);
     void bindVertexBuffers(uint32_t firstBinding,
                            uint32_t bindingCount,
                            const VkBuffer *buffers,
@@ -220,6 +224,22 @@ class CommandBuffer : public WrappedObject<CommandBuffer, VkCommandBuffer>
                             const VkDeviceSize *offsets,
                             const VkDeviceSize *sizes,
                             const VkDeviceSize *strides);
+    void bindVertexBuffers2NoSize(uint32_t firstBinding,
+                                  uint32_t bindingCount,
+                                  const VkBuffer *buffers,
+                                  const VkDeviceSize *offsets,
+                                  const VkDeviceSize *strides);
+    void bindVertexBuffers2NoSizeNoStride(uint32_t firstBinding,
+                                          uint32_t bindingCount,
+                                          const VkBuffer *buffers,
+                                          const VkDeviceSize *offsets);
+    void bindVertexBuffers2NoStride(uint32_t firstBinding,
+                                    uint32_t bindingCount,
+                                    const VkBuffer *buffers,
+                                    const VkDeviceSize *offsets,
+                                    const VkDeviceSize *sizes);
+
+    void bindTileMemory(const DeviceMemory &tileMemory);
 
     void blitImage(const Image &srcImage,
                    VkImageLayout srcImageLayout,
@@ -360,6 +380,7 @@ class CommandBuffer : public WrappedObject<CommandBuffer, VkCommandBuffer>
     void setLineWidth(float lineWidth);
     void setLogicOp(VkLogicOp logicOp);
     void setPrimitiveRestartEnable(VkBool32 primitiveRestartEnable);
+    void setPrimitiveTopology(VkPrimitiveTopology primitiveTopology);
     void setRasterizerDiscardEnable(VkBool32 rasterizerDiscardEnable);
     void setRenderingAttachmentLocations(const VkRenderingAttachmentLocationInfoKHR *info);
     void setRenderingInputAttachmentIndicates(const VkRenderingInputAttachmentIndexInfoKHR *info);
@@ -447,6 +468,9 @@ class Image final : public WrappedObject<Image, VkImage>
     VkResult init(VkDevice device, const VkImageCreateInfo &createInfo);
 
     void getMemoryRequirements(VkDevice device, VkMemoryRequirements *requirementsOut) const;
+    void getMemoryRequirements2(VkDevice device,
+                                const VkImageMemoryRequirementsInfo2 &info,
+                                VkMemoryRequirements2 *requirements2Out) const;
     VkResult bindMemory(VkDevice device, const DeviceMemory &deviceMemory);
     VkResult bindMemory2(VkDevice device, const VkBindImageMemoryInfoKHR &bindInfo);
 
@@ -475,7 +499,7 @@ class Semaphore final : public WrappedObject<Semaphore, VkSemaphore>
     Semaphore() = default;
     void destroy(VkDevice device);
 
-    VkResult init(VkDevice device);
+    VkResult init(VkDevice device, VkSemaphoreType semaphoreType);
     VkResult importFd(VkDevice device, const VkImportSemaphoreFdInfoKHR &importFdInfo) const;
 };
 
@@ -1037,6 +1061,15 @@ ANGLE_INLINE void CommandBuffer::bindIndexBuffer(const Buffer &buffer,
     vkCmdBindIndexBuffer(mHandle, buffer.getHandle(), offset, indexType);
 }
 
+ANGLE_INLINE void CommandBuffer::bindIndexBuffer2(const Buffer &buffer,
+                                                  VkDeviceSize offset,
+                                                  VkDeviceSize size,
+                                                  VkIndexType indexType)
+{
+    ASSERT(valid());
+    vkCmdBindIndexBuffer2KHR(mHandle, buffer.getHandle(), offset, size, indexType);
+}
+
 ANGLE_INLINE void CommandBuffer::bindDescriptorSets(const PipelineLayout &layout,
                                                     VkPipelineBindPoint pipelineBindPoint,
                                                     DescriptorSetIndex firstSet,
@@ -1165,6 +1198,12 @@ ANGLE_INLINE void CommandBuffer::setPrimitiveRestartEnable(VkBool32 primitiveRes
 {
     ASSERT(valid());
     vkCmdSetPrimitiveRestartEnableEXT(mHandle, primitiveRestartEnable);
+}
+
+ANGLE_INLINE void CommandBuffer::setPrimitiveTopology(VkPrimitiveTopology primitiveTopology)
+{
+    ASSERT(valid());
+    vkCmdSetPrimitiveTopologyEXT(mHandle, primitiveTopology);
 }
 
 ANGLE_INLINE void CommandBuffer::setRasterizerDiscardEnable(VkBool32 rasterizerDiscardEnable)
@@ -1418,6 +1457,41 @@ ANGLE_INLINE void CommandBuffer::bindVertexBuffers2(uint32_t firstBinding,
                                strides);
 }
 
+ANGLE_INLINE void CommandBuffer::bindVertexBuffers2NoSize(uint32_t firstBinding,
+                                                          uint32_t bindingCount,
+                                                          const VkBuffer *buffers,
+                                                          const VkDeviceSize *offsets,
+                                                          const VkDeviceSize *strides)
+{
+    bindVertexBuffers2(firstBinding, bindingCount, buffers, offsets, nullptr, strides);
+}
+
+ANGLE_INLINE void CommandBuffer::bindVertexBuffers2NoSizeNoStride(uint32_t firstBinding,
+                                                                  uint32_t bindingCount,
+                                                                  const VkBuffer *buffers,
+                                                                  const VkDeviceSize *offsets)
+{
+    bindVertexBuffers2(firstBinding, bindingCount, buffers, offsets, nullptr, nullptr);
+}
+
+ANGLE_INLINE void CommandBuffer::bindVertexBuffers2NoStride(uint32_t firstBinding,
+                                                            uint32_t bindingCount,
+                                                            const VkBuffer *buffers,
+                                                            const VkDeviceSize *offsets,
+                                                            const VkDeviceSize *sizes)
+{
+    bindVertexBuffers2(firstBinding, bindingCount, buffers, offsets, sizes, nullptr);
+}
+
+ANGLE_INLINE void CommandBuffer::bindTileMemory(const DeviceMemory &tileMemory)
+{
+    ASSERT(valid());
+    ASSERT(tileMemory.valid());
+    const VkTileMemoryBindInfoQCOM tileMemoryBindInfo = {
+        VK_STRUCTURE_TYPE_TILE_MEMORY_BIND_INFO_QCOM, nullptr, tileMemory.getHandle()};
+    vkCmdBindTileMemoryQCOM(mHandle, &tileMemoryBindInfo);
+}
+
 ANGLE_INLINE void CommandBuffer::beginTransformFeedback(uint32_t firstCounterBuffer,
                                                         uint32_t counterBufferCount,
                                                         const VkBuffer *counterBuffers,
@@ -1515,6 +1589,14 @@ ANGLE_INLINE void Image::getMemoryRequirements(VkDevice device,
     vkGetImageMemoryRequirements(device, mHandle, requirementsOut);
 }
 
+ANGLE_INLINE void Image::getMemoryRequirements2(VkDevice device,
+                                                const VkImageMemoryRequirementsInfo2 &info,
+                                                VkMemoryRequirements2 *requirements2Out) const
+{
+    ASSERT(valid());
+    vkGetImageMemoryRequirements2(device, &info, requirements2Out);
+}
+
 ANGLE_INLINE VkResult Image::bindMemory(VkDevice device, const vk::DeviceMemory &deviceMemory)
 {
     ASSERT(valid() && deviceMemory.valid());
@@ -1566,13 +1648,23 @@ ANGLE_INLINE void Semaphore::destroy(VkDevice device)
     }
 }
 
-ANGLE_INLINE VkResult Semaphore::init(VkDevice device)
+ANGLE_INLINE VkResult Semaphore::init(VkDevice device, VkSemaphoreType semaphoreType)
 {
     ASSERT(!valid());
 
     VkSemaphoreCreateInfo semaphoreInfo = {};
     semaphoreInfo.sType                 = VK_STRUCTURE_TYPE_SEMAPHORE_CREATE_INFO;
     semaphoreInfo.flags                 = 0;
+
+    VkSemaphoreTypeCreateInfoKHR semaphoreTypeInfo = {};
+    if (semaphoreType != VK_SEMAPHORE_TYPE_BINARY)
+    {
+        semaphoreTypeInfo.sType         = VK_STRUCTURE_TYPE_SEMAPHORE_TYPE_CREATE_INFO_KHR;
+        semaphoreTypeInfo.semaphoreType = semaphoreType;
+
+        // vk::AddToPNextChain is not available in this header.
+        semaphoreInfo.pNext = &semaphoreTypeInfo;
+    }
 
     return vkCreateSemaphore(device, &semaphoreInfo, nullptr, &mHandle);
 }

@@ -69,7 +69,7 @@ egl::Error PbufferSurfaceGLX::makeCurrent(const gl::Context *context)
     return egl::NoError();
 }
 
-egl::Error PbufferSurfaceGLX::swap(const gl::Context *context)
+egl::Error PbufferSurfaceGLX::swap(const gl::Context *context, SurfaceSwapFeedback *feedback)
 {
     return egl::NoError();
 }
@@ -105,14 +105,9 @@ egl::Error PbufferSurfaceGLX::releaseTexImage(const gl::Context *context, EGLint
 
 void PbufferSurfaceGLX::setSwapInterval(const egl::Display *display, EGLint interval) {}
 
-EGLint PbufferSurfaceGLX::getWidth() const
+gl::Extents PbufferSurfaceGLX::getSize() const
 {
-    return mWidth;
-}
-
-EGLint PbufferSurfaceGLX::getHeight() const
-{
-    return mHeight;
+    return gl::Extents(mWidth, mHeight, 1);
 }
 
 EGLint PbufferSurfaceGLX::isPostSubBufferSupported() const

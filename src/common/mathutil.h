@@ -9,12 +9,17 @@
 #ifndef COMMON_MATHUTIL_H_
 #define COMMON_MATHUTIL_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <math.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
 #include <algorithm>
 #include <limits>
+#include <ostream>
 
 #include <anglebase/numerics/safe_math.h>
 
@@ -41,7 +46,7 @@ inline constexpr bool isPow2(T x)
 }
 
 template <typename T>
-inline int log2(T x)
+inline constexpr int log2(T x)
 {
     static_assert(std::is_integral<T>::value, "log2 must be called on an integer type.");
     int r = 0;
@@ -860,28 +865,44 @@ typedef Range<unsigned int> RangeUI;
 static_assert(std::is_trivially_copyable<RangeUI>(),
               "RangeUI should be trivial copyable so that we can memcpy");
 
+// Inclusive vertex index range [start(), end()].
 struct IndexRange
 {
     struct Undefined
     {};
     IndexRange(Undefined) {}
-    IndexRange() : IndexRange(0, 0, 0) {}
-    IndexRange(size_t start_, size_t end_, size_t vertexIndexCount_)
-        : start(start_), end(end_), vertexIndexCount(vertexIndexCount_)
+    IndexRange() = default;
+    IndexRange(uint32_t start_, uint32_t end_) : mStart(start_), mCount(end_ - start_ + 1)
     {
-        ASSERT(start <= end);
+        ASSERT(start_ <= end_);
+    }
+    bool isEmpty() const { return mCount == 0; }
+    uint32_t start() const
+    {
+        ASSERT(!isEmpty());
+        return mStart;
+    }
+    uint32_t end() const
+    {
+        ASSERT(!isEmpty());
+        return mStart + mCount - 1;
     }
 
     // Number of vertices in the range.
-    size_t vertexCount() const { return (end - start) + 1; }
+    uint32_t vertexCount() const { return mCount; }
 
-    // Inclusive range of indices that are not primitive restart
-    size_t start;
-    size_t end;
-
-    // Number of non-primitive restart indices
-    size_t vertexIndexCount;
+  private:
+    uint32_t mStart{0};
+    uint32_t mCount{0};
 };
+
+inline bool operator==(const IndexRange &a, const IndexRange &b)
+{
+    return a.vertexCount() == b.vertexCount() &&
+           ((a.vertexCount() == 0) || (a.start() == b.start()));
+}
+
+std::ostream &operator<<(std::ostream &s, const IndexRange &a);
 
 // Combine a floating-point value representing a mantissa (x) and an integer exponent (exp) into a
 // floating-point value. As in GLSL ldexp() built-in.
@@ -1484,7 +1505,7 @@ template <typename T>
 constexpr T roundUpPow2(const T value, const T alignment)
 {
     ASSERT(gl::isPow2(alignment));
-    return (value + alignment - 1) & ~(alignment - 1);
+    return (value + (alignment - 1)) & ~(alignment - 1);
 }
 
 template <typename T>
@@ -1492,6 +1513,15 @@ constexpr T roundDownPow2(const T value, const T alignment)
 {
     ASSERT(gl::isPow2(alignment));
     return value & ~(alignment - 1);
+}
+
+template <typename T>
+angle::CheckedNumeric<T> CheckedRoundUpPow2(const T value, const T alignment)
+{
+    ASSERT(gl::isPow2(alignment));
+    angle::CheckedNumeric<T> checkedValue(value);
+    angle::CheckedNumeric<T> checkedAlignment(alignment);
+    return (checkedValue + checkedAlignment - 1) & ~(checkedAlignment - 1);
 }
 
 template <typename T>

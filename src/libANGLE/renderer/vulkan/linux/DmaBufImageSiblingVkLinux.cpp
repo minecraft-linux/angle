@@ -6,9 +6,14 @@
 
 // DmaBufImageSiblingVkLinux.cpp: Implements DmaBufImageSiblingVkLinux.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/vulkan/linux/DmaBufImageSiblingVkLinux.h"
 
 #include "common/linux/dma_buf_utils.h"
+#include "common/system_utils.h"
 #include "libANGLE/Display.h"
 #include "libANGLE/renderer/vulkan/DisplayVk.h"
 #include "libANGLE/renderer/vulkan/vk_renderer.h"
@@ -282,7 +287,8 @@ angle::Result GetAllocateInfo(const egl::AttributeMap &attribs,
         bool areFdsIdentical = true;
         for (uint32_t plane = 1; plane < planeCount; ++plane)
         {
-            if (attribs.getAsInt(kFds[plane]) != attribs.getAsInt(kFds[0]))
+            if (!angle::IsSameFileDescriptor(attribs.getAsInt(kFds[plane]),
+                                             attribs.getAsInt(kFds[0])))
             {
                 areFdsIdentical = false;
                 break;
@@ -551,11 +557,11 @@ angle::Result DmaBufImageSiblingVkLinux::initWithFormat(DisplayVk *displayVk,
                               linearFilterSupported);
     }
 
-    ANGLE_TRY(mImage->initExternal(displayVk, gl::TextureType::_2D, vkExtents, intendedFormatID,
-                                   actualImageFormatID, 1, usageFlags, createFlags,
-                                   vk::ImageLayout::ExternalPreInitialized, imageCreateInfoPNext,
-                                   gl::LevelIndex(0), 1, 1, kIsRobustInitEnabled,
-                                   hasProtectedContent(), conversionDesc, nullptr));
+    ANGLE_TRY(mImage->initExternal(
+        displayVk, gl::TextureType::_2D, vkExtents, intendedFormatID, actualImageFormatID, 1,
+        usageFlags, createFlags, vk::ImageAccess::ExternalPreInitialized, imageCreateInfoPNext,
+        gl::LevelIndex(0), 1, 1, kIsRobustInitEnabled, hasProtectedContent(),
+        vk::TileMemory::Prohibited, conversionDesc, nullptr));
 
     VkMemoryRequirements externalMemoryRequirements;
     mImage->getImage().getMemoryRequirements(renderer->getDevice(), &externalMemoryRequirements);
@@ -578,8 +584,9 @@ angle::Result DmaBufImageSiblingVkLinux::initImpl(DisplayVk *displayVk)
 {
     vk::Renderer *renderer = displayVk->getRenderer();
 
-    const vk::Format &vkFormat  = renderer->getFormat(mFormat.info->sizedInternalFormat);
-    const angle::Format &format = vkFormat.getActualImageFormat(rx::vk::ImageAccess::SampleOnly);
+    const vk::Format &vkFormat = renderer->getFormat(mFormat.info->sizedInternalFormat);
+    const angle::Format &format =
+        vkFormat.getActualImageFormat(rx::vk::ImageFormatSupport::SampleOnly);
 
     InitResult initResult;
 

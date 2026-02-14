@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <cctype>
 
 #include "compiler/translator/InfoSink.h"
@@ -113,7 +117,6 @@ class ProgramPrelude : public TIntermTraverser
     void degrees();
     void radians();
     void mod();
-    void mixBool();
     void postIncrementMatrix();
     void preIncrementMatrix();
     void postDecrementMatrix();
@@ -127,8 +130,6 @@ class ProgramPrelude : public TIntermTraverser
     void addScalarMatrix();
     void subMatrixScalar();
     void subScalarMatrix();
-    void divMatrixScalar();
-    void divMatrixScalarAssign();
     void divScalarMatrix();
     void componentWiseDivide();
     void componentWiseDivideAssign();
@@ -279,6 +280,7 @@ class ProgramPrelude : public TIntermTraverser
     void interpolateAtCentroid();
     void interpolateAtSample();
     void interpolateAtOffset();
+    void loopForwardProgress();
 
   private:
     TInfoSinkBase &mOut;
@@ -430,15 +432,6 @@ template <typename X, typename Y>
 ANGLE_ALWAYS_INLINE X ANGLE_mod(X x, Y y)
 {
     return x - y * metal::floor(x / y);
-}
-)")
-
-PROGRAM_PRELUDE_DECLARE(mixBool,
-                        R"(
-template <typename T, int N>
-ANGLE_ALWAYS_INLINE metal::vec<T,N> ANGLE_mix_bool(metal::vec<T, N> a, metal::vec<T, N> b, metal::vec<bool, N> c)
-{
-    return metal::mix(a, b, static_cast<metal::vec<T,N>>(c));
 }
 )")
 
@@ -599,32 +592,6 @@ ANGLE_ALWAYS_INLINE metal::matrix<T, Cols, Rows> operator-(T x, metal::matrix<T,
     return m;
 }
 )")
-
-PROGRAM_PRELUDE_DECLARE(divMatrixScalarAssign,
-                        R"(
-template <typename T, int Cols, int Rows>
-ANGLE_ALWAYS_INLINE thread metal::matrix<T, Cols, Rows> &operator/=(thread metal::matrix<T, Cols, Rows> &m, T x)
-{
-    for (size_t col = 0; col < Cols; ++col)
-    {
-        m[col] /= x;
-    }
-    return m;
-}
-)")
-
-PROGRAM_PRELUDE_DECLARE(divMatrixScalar,
-                        R"(
-#if __METAL_VERSION__ <= 220
-template <typename T, int Cols, int Rows>
-ANGLE_ALWAYS_INLINE metal::matrix<T, Cols, Rows> operator/(metal::matrix<T, Cols, Rows> m, T x)
-{
-    m /= x;
-    return m;
-}
-#endif
-)",
-                        divMatrixScalarAssign())
 
 PROGRAM_PRELUDE_DECLARE(divScalarMatrix,
                         R"(
@@ -2796,6 +2763,14 @@ template <typename T>
 ANGLE_ALWAYS_INLINE T ANGLE_interpolateAtOffset(T value, float2) { return value; }
 )")
 
+PROGRAM_PRELUDE_DECLARE(loopForwardProgress,
+                        R"(
+ANGLE_ALWAYS_INLINE void ANGLE_loopForwardProgress()
+{
+    volatile bool p = true;
+}
+)")
+
 ////////////////////////////////////////////////////////////////////////////////
 
 // Returned Name is valid for as long as `buffer` is still alive.
@@ -3430,14 +3405,7 @@ void ProgramPrelude::visitOperator(TOperator op,
         case TOperator::EOpMax:
         case TOperator::EOpStep:
         case TOperator::EOpSmoothstep:
-            break;
         case TOperator::EOpMix:
-            if (argType2->getBasicType() == TBasicType::EbtBool)
-            {
-                mixBool();
-            }
-            break;
-
         case TOperator::EOpAll:
         case TOperator::EOpAny:
         case TOperator::EOpIsnan:
@@ -3486,34 +3454,23 @@ void ProgramPrelude::visitOperator(TOperator op,
             break;
 
         case TOperator::EOpDiv:
-            if (argType0->isMatrix())
+            if (argType1->isMatrix())
             {
-                if (argType1->isMatrix())
+                if (argType0->isMatrix())
                 {
                     componentWiseDivide();
                 }
-                else if (argType1->isScalar())
+                else if (argType0->isScalar())
                 {
-                    divMatrixScalar();
+                    divScalarMatrix();
                 }
-            }
-            if (argType0->isScalar() && argType1->isMatrix())
-            {
-                divScalarMatrix();
             }
             break;
 
         case TOperator::EOpDivAssign:
-            if (argType0->isMatrix())
+            if (argType0->isMatrix() && argType1->isMatrix())
             {
-                if (argType1->isMatrix())
-                {
-                    componentWiseDivideAssign();
-                }
-                else if (argType1->isScalar())
-                {
-                    divMatrixScalarAssign();
-                }
+                componentWiseDivideAssign();
             }
             break;
 
@@ -3688,6 +3645,10 @@ void ProgramPrelude::visitOperator(TOperator op,
 
         case TOperator::EOpConstruct:
             ASSERT(!func);
+            break;
+
+        case TOperator::EOpLoopForwardProgress:
+            loopForwardProgress();
             break;
 
         case TOperator::EOpCallFunctionInAST:

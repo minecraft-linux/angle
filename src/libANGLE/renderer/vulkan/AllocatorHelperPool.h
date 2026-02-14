@@ -10,6 +10,10 @@
 #ifndef LIBANGLE_RENDERER_VULKAN_ALLOCATORHELPERPOOL_H_
 #define LIBANGLE_RENDERER_VULKAN_ALLOCATORHELPERPOOL_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "common/PoolAlloc.h"
 #include "common/vulkan/vk_headers.h"
 #include "libANGLE/renderer/vulkan/vk_command_buffer_utils.h"
@@ -32,26 +36,14 @@ class DedicatedCommandBlockAllocator
   public:
     DedicatedCommandBlockAllocator() = default;
     void resetAllocator();
-    bool hasAllocatorLinks() const { return false; }
-
-    static constexpr size_t kDefaultPoolAllocatorPageSize = 16 * 1024;
-    void init()
-    {
-        mAllocator.initialize(kDefaultPoolAllocatorPageSize, 1);
-        // Push a scope into the pool allocator so we can easily free and re-init on reset()
-        mAllocator.push();
-    }
-
-    // Placeholder functions for attaching and detaching the allocator.
-    void attachAllocator(DedicatedCommandMemoryAllocator *allocator) {}
-    DedicatedCommandMemoryAllocator *detachAllocator(bool isCommandBufferEmpty) { return nullptr; }
 
     DedicatedCommandMemoryAllocator *getAllocator() { return &mAllocator; }
 
   private:
+    static constexpr size_t kDefaultPoolAllocatorPageSize = 16 * 1024;
     // Using a pool allocator per CBH to avoid threading issues that occur w/ shared allocator
     // between multiple CBHs.
-    DedicatedCommandMemoryAllocator mAllocator;
+    DedicatedCommandMemoryAllocator mAllocator{kDefaultPoolAllocatorPageSize, 1};
 };
 
 // Used in SecondaryCommandBuffer
@@ -124,11 +116,6 @@ class DedicatedCommandBlockPool final
 
         *headerOut = updateHeaderAndAllocatorParams(allocationSize);
     }
-
-    // Placeholder functions
-    void terminateLastCommandBlock() {}
-    void attachAllocator(vk::DedicatedCommandMemoryAllocator *source) {}
-    void detachAllocator(vk::DedicatedCommandMemoryAllocator *destination) {}
 
   private:
     void allocateNewBlock(size_t blockSize = kBlockSize);

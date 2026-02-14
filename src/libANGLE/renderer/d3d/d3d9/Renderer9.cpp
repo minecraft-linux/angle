@@ -6,6 +6,10 @@
 
 // Renderer9.cpp: Implements a back-end specific class for the D3D9 renderer.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d9/Renderer9.h"
 
 #include <EGL/eglext.h>
@@ -1165,6 +1169,8 @@ angle::Result Renderer9::updateState(const gl::Context *context, gl::PrimitiveMo
     if (firstColorAttachment)
     {
         ASSERT(firstColorAttachment->isAttached());
+        // GL_OVR_multiview_multisampled_render_to_texture is not supported on D3D backend
+        ASSERT(!(firstColorAttachment->isRenderToTexture() && firstColorAttachment->isMultiview()));
         RenderTarget9 *renderTarget = nullptr;
         ANGLE_TRY(firstColorAttachment->getRenderTarget(context, firstColorAttachment->getSamples(),
                                                         &renderTarget));
@@ -1204,6 +1210,8 @@ angle::Result Renderer9::setBlendDepthRasterStates(const gl::Context *context,
     if (firstColorAttachment)
     {
         ASSERT(firstColorAttachment->isAttached());
+        // GL_OVR_multiview_multisampled_render_to_texture is not supported on D3D backend
+        ASSERT(!(firstColorAttachment->isRenderToTexture() && firstColorAttachment->isMultiview()));
         RenderTarget9 *renderTarget = nullptr;
         ANGLE_TRY(firstColorAttachment->getRenderTarget(context, firstColorAttachment->getSamples(),
                                                         &renderTarget));
@@ -1496,16 +1504,17 @@ angle::Result Renderer9::drawElementsImpl(const gl::Context *context,
     ANGLE_TRY(applyIndexBuffer(context, indices, count, mode, type, &indexInfo));
 
     gl::IndexRange indexRange;
-    ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(context, type, count, indices,
-                                                                  &indexRange));
+    ANGLE_TRY(context->getState().getVertexArray()->getIndexRange(
+        context, type, count, indices, context->getState().isPrimitiveRestartEnabled(),
+        &indexRange));
 
     size_t vertexCount = indexRange.vertexCount();
-    ANGLE_TRY(applyVertexBuffer(context, mode, static_cast<GLsizei>(indexRange.start),
+    ANGLE_TRY(applyVertexBuffer(context, mode, static_cast<GLsizei>(indexRange.start()),
                                 static_cast<GLsizei>(vertexCount), instances, &indexInfo));
 
     startScene();
 
-    int minIndex = static_cast<int>(indexRange.start);
+    int minIndex = static_cast<int>(indexRange.start());
 
     gl::VertexArray *vao           = context->getState().getVertexArray();
     gl::Buffer *elementArrayBuffer = vao->getElementArrayBuffer();
@@ -2604,7 +2613,7 @@ angle::Result Renderer9::createRenderTarget(const gl::Context *context,
     const d3d9::TextureFormat &d3d9FormatInfo = d3d9::GetTextureFormatInfo(format);
 
     const gl::TextureCaps &textureCaps = getNativeTextureCaps().get(format);
-    GLuint supportedSamples            = textureCaps.getNearestSamples(samples);
+    GLuint supportedSamples            = textureCaps.sampleCounts.getNearestSamples(samples);
 
     IDirect3DTexture9 *texture      = nullptr;
     IDirect3DSurface9 *renderTarget = nullptr;

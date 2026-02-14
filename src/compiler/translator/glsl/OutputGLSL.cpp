@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "compiler/translator/glsl/OutputGLSL.h"
 
 #include "compiler/translator/Compiler.h"
@@ -75,8 +79,10 @@ ImmutableString TOutputGLSL::translateTextureFunction(const ImmutableString &nam
         }
         else
         {
-            // Default translating textureVideoWEBGL to texture2D.
-            return ImmutableString("texture2D");
+            // For GLSL 130+, use "texture" instead of "texture2D" to match the translation
+            // of samplerVideoWEBGL to sampler2D and the GLSL version's texture function naming.
+            return sh::IsGLSL130OrNewer(getShaderOutput()) ? ImmutableString("texture")
+                                                           : ImmutableString("texture2D");
         }
     }
 

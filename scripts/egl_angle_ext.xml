@@ -9,11 +9,6 @@
         Includes data used to auto-generate ANGLE classes.
     </comment>
 
-    <!-- SECTION: EGL type definitions. -->
-    <types>
-        <type requires="khrplatform">typedef khronos_uint64_t <name>EGLFrameTokenANGLE</name>;</type>
-    </types>
-
     <!-- SECTION: EGL command definitions. -->
     <commands namespace="EGL">
         <command>
@@ -95,12 +90,6 @@
         <command>
             <proto>void <name>eglReleaseExternalContextANGLE</name></proto>
             <param><ptype>EGLDisplay</ptype> <name>dpy</name></param>
-        </command>
-        <command>
-            <proto><ptype>EGLBoolean</ptype> <name>eglSwapBuffersWithFrameTokenANGLE</name></proto>
-            <param><ptype>EGLDisplay</ptype> <name>dpy</name></param>
-            <param><ptype>EGLSurface</ptype> <name>surface</name></param>
-            <param><ptype>EGLFrameTokenANGLE</ptype> <name>frametoken</name></param>
         </command>
         <command>
             <proto><ptype>void</ptype> <name>eglLockVulkanQueueANGLE</name></proto>
@@ -221,11 +210,6 @@
                 <command name="eglWaitUntilWorkScheduledANGLE"/>
             </require>
         </extension>
-        <extension name="EGL_ANGLE_swap_with_frame_token" supported="egl">
-            <require>
-                <command name="eglSwapBuffersWithFrameTokenANGLE"/>
-            </require>
-        </extension>
         <extension name="EGL_ANGLE_prepare_swap_buffers" supported="egl">
             <require>
                 <command name="eglPrepareSwapBuffersANGLE"/>
@@ -289,6 +273,7 @@
         <extension name="EGL_ANGLE_create_context_webgl_compatibility" supported="egl">
             <require>
                 <enum name="EGL_CONTEXT_WEBGL_COMPATIBILITY_ANGLE"/>
+                <enum name="EGL_CONTEXT_HARDENED_ANGLE"/>
             </require>
         </extension>
         <extension name="EGL_ANGLE_create_surface_swap_interval" supported="egl">
@@ -360,11 +345,6 @@
                 <enum name="EGL_EXPERIMENTAL_PRESENT_PATH_ANGLE"/>
                 <enum name="EGL_EXPERIMENTAL_PRESENT_PATH_FAST_ANGLE"/>
                 <enum name="EGL_EXPERIMENTAL_PRESENT_PATH_COPY_ANGLE"/>
-            </require>
-        </extension>
-        <extension name="EGL_ANGLE_ggp_stream_descriptor" supported="egl">
-            <require>
-                <enum name="EGL_GGP_STREAM_DESCRIPTOR_ANGLE"/>
             </require>
         </extension>
         <extension name="EGL_ANGLE_iosurface_client_buffer" supported="egl">
@@ -551,6 +531,11 @@
                 <enum name="EGL_CONTEXT_MEMORY_USAGE_ANGLE"/>
             </require>
         </extension>
+        <extension name="EGL_ANGLE_metal_commands_scheduled_sync" supported="egl">
+            <require>
+                <enum name="EGL_SYNC_METAL_COMMANDS_SCHEDULED_ANGLE"/>
+            </require>
+        </extension>
     </extensions>
 
     <!-- SECTION: EGL enumerant (token) definitions. -->
@@ -628,7 +613,6 @@
         <enum value="0x3488" name="EGL_PLATFORM_ANGLE_D3D11ON12_ANGLE"/>
         <enum value="0x3489" name="EGL_PLATFORM_ANGLE_TYPE_METAL_ANGLE"/>
         <enum value="0x348A" name="EGL_IOSURFACE_USAGE_HINT_ANGLE"/>
-        <enum value="0x348B" name="EGL_GGP_STREAM_DESCRIPTOR_ANGLE"/>
         <enum value="0x348C" name="EGL_EAGL_CONTEXT_ANGLE"/>
 
         <!-- NOTE: Yes, these two values are the same according to the extension specs. -->
@@ -680,10 +664,14 @@
         <enum value="0x34DE" name="EGL_SYNC_GLOBAL_FENCE_ANGLE"/>
         <enum value="0x34DF" name="EGL_PLATFORM_ANGLE_TYPE_WEBGPU_ANGLE"/>
     </enums>
+    <enums namespace="EGL" start="0x34E0" end="0x34E0" vendor="ANGLE">
+        <enum value="0x34E0" name="EGL_SYNC_METAL_COMMANDS_SCHEDULED_ANGLE"/>
+    </enums>
     <enums namespace="EGL" start="0x34F0" end="0x34FF" vendor="ANGLE">
         <enum value="0x34F0" name="EGL_PLATFORM_ANGLE_VULKAN_DEVICE_UUID_ANGLE"/>
         <enum value="0x34F1" name="EGL_PLATFORM_ANGLE_VULKAN_DRIVER_UUID_ANGLE"/>
         <enum value="0x34F2" name="EGL_PLATFORM_ANGLE_VULKAN_DRIVER_ID_ANGLE"/>
+        <enum value="0x34F8" name="EGL_CONTEXT_HARDENED_ANGLE"/>
     </enums>
     <enums namespace="EGL" vendor="ANGLE">
         <enum value="0x0001" name="EGL_LOW_POWER_ANGLE"/>

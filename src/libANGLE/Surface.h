@@ -84,7 +84,6 @@ class Surface : public LabeledObject, public gl::FramebufferAttachmentObject
     Error prepareSwap(const gl::Context *context);
     Error swap(gl::Context *context);
     Error swapWithDamage(gl::Context *context, const EGLint *rects, EGLint n_rects);
-    Error swapWithFrameToken(gl::Context *context, EGLFrameTokenANGLE frameToken);
     Error postSubBuffer(const gl::Context *context,
                         EGLint x,
                         EGLint y,
@@ -113,18 +112,11 @@ class Surface : public LabeledObject, public gl::FramebufferAttachmentObject
 
     const Config *getConfig() const;
 
-    // width and height can change with client window resizing
-    EGLint getWidth() const;
-    EGLint getHeight() const;
-    // Note: windows cannot be resized on Android.  The approach requires
-    // calling vkGetPhysicalDeviceSurfaceCapabilitiesKHR.  However, that is
-    // expensive; and there are troublesome timing issues for other parts of
-    // ANGLE (which cause test failures and crashes).  Therefore, a
-    // special-Android-only path is created just for the querying of EGL_WIDTH
-    // and EGL_HEIGHT.
-    // https://issuetracker.google.com/issues/153329980
-    egl::Error getUserWidth(const egl::Display *display, EGLint *value) const;
-    egl::Error getUserHeight(const egl::Display *display, EGLint *value) const;
+    // size can change with client window resizing
+    // Size must be resolved before the call either during state synchronization or explicitly.
+    gl::Extents getSize() const;
+    // Unresolved Surface size until render target is first accessed (e.g. after draw).
+    egl::Error getUserSize(const egl::Display *display, EGLint *width, EGLint *height) const;
     EGLint getPixelAspectRatio() const;
     EGLenum getRenderBuffer() const;
     EGLenum getRequestedRenderBuffer() const;
@@ -154,7 +146,9 @@ class Surface : public LabeledObject, public gl::FramebufferAttachmentObject
     EGLint getLuminanceOffset() const;
     EGLint getBitmapPixelSize() const;
     EGLAttribKHR getBitmapPointer() const;
-    EGLint getCompressionRate(const egl::Display *display) const;
+    egl::Error getCompressionRate(const egl::Display *display,
+                                  const gl::Context *context,
+                                  EGLint *rate);
     egl::Error lockSurfaceKHR(const egl::Display *display, const AttributeMap &attributes);
     egl::Error unlockSurfaceKHR(const egl::Display *display);
 
@@ -166,6 +160,9 @@ class Surface : public LabeledObject, public gl::FramebufferAttachmentObject
     EGLint isFixedSize() const;
 
     // FramebufferAttachmentObject implementation
+    // Explicitly resolves surface size to use before state synchronization (e.g. validation).
+    angle::Result ensureSizeResolved(const gl::Context *context) const override;
+    bool isAttachmentSpecified(const gl::ImageIndex &imageIndex) const override;
     gl::Extents getAttachmentSize(const gl::ImageIndex &imageIndex) const override;
     gl::Format getAttachmentFormat(GLenum binding, const gl::ImageIndex &imageIndex) const override;
     GLsizei getAttachmentSamples(const gl::ImageIndex &imageIndex) const override;
@@ -307,7 +304,7 @@ class Surface : public LabeledObject, public gl::FramebufferAttachmentObject
 
     Error destroyImpl(const Display *display);
 
-    void postSwap(const gl::Context *context);
+    void postSwap(const gl::Context *context, const rx::SurfaceSwapFeedback &feedback);
     Error releaseRef(const Display *display);
 
     // ObserverInterface implementation.

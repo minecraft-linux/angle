@@ -275,6 +275,39 @@ TEST_P(SRGBTextureTest, SRGBDecodeTextureParameter)
     EXPECT_PIXEL_COLOR_NEAR(0, 0, decodedToLinearColor, 1.0);
 }
 
+// Test that GL_SKIP_DECODE_EXT makes glGenerateMipmap skip sRGB conversion
+TEST_P(SRGBTextureTestES3, SRGBSkipEncodeAndDecodeInGenerateMipmap)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_sRGB_decode"));
+
+    constexpr angle::GLColor srgbColor(21, 30, 39, 24);
+    constexpr angle::GLColor linearColor(12, 16, 20, 24);
+    static const GLubyte input[4][4] = {{48, 64, 80, 96}, {0, 0, 0, 0}, {0, 0, 0, 0}, {0, 0, 0, 0}};
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_SRGB8_ALPHA8, 2, 2, 0, GL_RGBA, GL_UNSIGNED_BYTE, input);
+    ASSERT_GL_NO_ERROR();
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_SKIP_DECODE_EXT);
+
+    glUseProgram(mProgram);
+    glUniform1i(mTextureLocation, 0);
+
+    glViewport(0, 0, 1, 1);
+
+    drawQuad(mProgram, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, srgbColor, 1.0);
+
+    glGenerateMipmap(GL_TEXTURE_2D);
+
+    glViewport(1, 0, 1, 1);
+
+    drawQuad(mProgram, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(1, 0, linearColor, 1.0);
+}
+
 // Test interaction between SRGB decode and texelFetch
 TEST_P(SRGBTextureTestES3, SRGBDecodeTexelFetch)
 {
@@ -295,6 +328,56 @@ out vec4 my_FragColor;
 void main() {
     ivec2 sampleCoords = ivec2(v_position.xy * 0.5 + 0.5);
     my_FragColor = texelFetch(tex, sampleCoords, 0);
+}
+)";
+
+    GLTexture tex;
+    glBindTexture(GL_TEXTURE_2D, tex);
+    glTexImage2D(GL_TEXTURE_2D, 0, getSRGBA8TextureInternalFormat(), 1, 1, 0,
+                 getSRGBA8TextureFormat(), GL_UNSIGNED_BYTE, srgbColor.data());
+    ASSERT_GL_NO_ERROR();
+
+    glUseProgram(mProgram);
+    glUniform1i(mTextureLocation, 0);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_DECODE_EXT);
+    drawQuad(mProgram, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, decodedToLinearColor, 1.0);
+
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_SRGB_DECODE_EXT, GL_SKIP_DECODE_EXT);
+    drawQuad(mProgram, "position", 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, srgbColor, 1.0);
+
+    ANGLE_GL_PROGRAM(texelFetchProgram, essl3_shaders::vs::Passthrough(), kTexelFetchFS);
+    glUseProgram(texelFetchProgram);
+    GLint texLocation = glGetUniformLocation(texelFetchProgram, "tex");
+    ASSERT_GE(texLocation, 0);
+    glUniform1i(texLocation, 0);
+
+    drawQuad(texelFetchProgram, "a_position", 0.5f);
+    EXPECT_PIXEL_COLOR_NEAR(0, 0, decodedToLinearColor, 1.0);
+}
+
+// Test interaction between SRGB decode and texelFetch of an array of textures
+TEST_P(SRGBTextureTestES3, SRGBDecodeTexelFetchArray)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_sRGB_decode"));
+
+    constexpr angle::GLColor srgbColor(64, 127, 191, 255);
+    constexpr angle::GLColor decodedToLinearColor(13, 54, 133, 255);
+
+    constexpr char kTexelFetchFS[] = R"(#version 300 es
+precision highp float;
+precision highp int;
+
+uniform highp sampler2D tex[1];
+
+in vec4 v_position;
+out vec4 my_FragColor;
+
+void main() {
+    ivec2 sampleCoords = ivec2(v_position.xy * 0.5 + 0.5);
+    my_FragColor = texelFetch(tex[0], sampleCoords, 0);
 }
 )";
 
@@ -617,6 +700,114 @@ TEST_P(SRGBTextureTestES3, SRGBDecodeOverridePriority)
     drawQuad(mProgram, "position", 0.5f);
 
     EXPECT_PIXEL_COLOR_NEAR(0, 0, linearColor, 1.0);
+}
+
+// GL_RGBA, GL_RGB and GL_SRGB_ALPHA_EXT, GL_SRGB_EXT should be compatible formats and valid
+// combination.
+TEST_P(SRGBTextureTestES3, SRGBFormatCombinationValidation)
+{
+    ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_sRGB"));
+
+    typedef struct formatCombination
+    {
+        GLint internalformat;
+        GLenum format;
+        GLenum subFormat;
+    } formatCombination;
+
+    std::vector<formatCombination> combinations = {
+        {GL_SRGB_EXT, GL_RGB, GL_RGB},
+        {GL_SRGB_EXT, GL_SRGB_EXT, GL_RGB},
+        {GL_SRGB_ALPHA_EXT, GL_RGBA, GL_SRGB_ALPHA_EXT},
+        {GL_SRGB_ALPHA_EXT, GL_SRGB_ALPHA_EXT, GL_SRGB_ALPHA_EXT},
+        {GL_SRGB8, GL_SRGB_EXT, GL_RGB},
+        {GL_SRGB8_ALPHA8, GL_SRGB_ALPHA_EXT, GL_SRGB_ALPHA_EXT},
+        {GL_SRGB_EXT, GL_RGB, GL_SRGB_EXT},
+        {GL_SRGB_EXT, GL_SRGB_EXT, GL_SRGB_EXT},
+        {GL_SRGB_ALPHA_EXT, GL_RGBA, GL_RGBA},
+        {GL_SRGB_ALPHA_EXT, GL_SRGB_ALPHA_EXT, GL_RGBA},
+        {GL_SRGB8, GL_SRGB_EXT, GL_SRGB_EXT},
+        {GL_SRGB8_ALPHA8, GL_SRGB_ALPHA_EXT, GL_RGBA},
+    };
+
+    constexpr GLColor linearColor1(132, 55, 219, 255);
+    constexpr GLColor srgbColor1(190, 128, 238, 255);
+    constexpr GLColor linearColor2(13, 54, 133, 255);
+    constexpr GLColor srgbColor2(64, 127, 191, 255);
+    GLubyte srgbColor3D[] = {190, 128, 238, 255, 230, 159, 191, 255};
+
+    GLuint program3D = 0;
+    const char *vs3D =
+        "#version 300 es\n"
+        "out vec3 texcoord;\n"
+        "in vec4 position;\n"
+        "void main()\n"
+        "{\n"
+        "    gl_Position = vec4(position.xy, 0.0, 1.0);\n"
+        "    texcoord = (position.xyz * 0.5) + 0.5;\n"
+        "}\n";
+    const char *fs3D =
+        "#version 300 es\n"
+        "precision highp float;\n"
+        "uniform highp sampler3D tex3D;\n"
+        "in vec3 texcoord;\n"
+        "out vec4 fragColor;\n"
+        "void main()\n"
+        "{\n"
+        "    fragColor = texture(tex3D, vec3(texcoord.x, texcoord.z, texcoord.y));\n"
+        "}\n";
+    program3D = CompileProgram(vs3D, fs3D);
+    glUseProgram(program3D);
+    GLint texLocation3D = glGetUniformLocation(program3D, "tex3D");
+    ASSERT_NE(-1, texLocation3D);
+
+    glDisable(GL_DEPTH_TEST);
+    glDisable(GL_BLEND);
+    for (auto comb : combinations)
+    {
+        GLTexture texSRGB;
+        glBindTexture(GL_TEXTURE_2D, texSRGB);
+        glTexImage2D(GL_TEXTURE_2D, 0, comb.internalformat, 1, 1, 0, comb.format, GL_UNSIGNED_BYTE,
+                     srgbColor1.data());
+        EXPECT_GL_NO_ERROR();
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glUseProgram(mProgram);
+        glUniform1i(mTextureLocation, 0);
+        drawQuad(mProgram, "position", 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, linearColor1, 1.0);
+
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 1, 1, comb.subFormat, GL_UNSIGNED_BYTE,
+                        srgbColor2.data());
+        EXPECT_GL_NO_ERROR();
+        glUseProgram(mProgram);
+        glUniform1i(mTextureLocation, 0);
+        drawQuad(mProgram, "position", 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, linearColor2, 1.0);
+
+        GLTexture tex3DSRGB;
+        glBindTexture(GL_TEXTURE_3D, tex3DSRGB);
+        glTexImage3D(GL_TEXTURE_3D, 0, comb.internalformat, 1, 1, 2, 0, comb.format,
+                     GL_UNSIGNED_BYTE, srgbColor3D);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_WRAP_R, GL_CLAMP_TO_EDGE);
+        EXPECT_GL_NO_ERROR();
+        glUseProgram(program3D);
+        glUniform1i(texLocation3D, 0);
+        drawQuad(program3D, "position", 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, linearColor1, 1.0);
+
+        glTexSubImage3D(GL_TEXTURE_3D, 0, 0, 0, 0, 1, 1, 1, comb.subFormat, GL_UNSIGNED_BYTE,
+                        srgbColor2.data());
+        EXPECT_GL_NO_ERROR();
+        glUseProgram(program3D);
+        glUniform1i(texLocation3D, 0);
+        drawQuad(program3D, "position", 0.5f);
+        EXPECT_PIXEL_COLOR_NEAR(0, 0, linearColor2, 1.0);
+    }
 }
 
 // Test that mipmaps are generated correctly for sRGB textures

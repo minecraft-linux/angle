@@ -261,8 +261,7 @@ egl::Error DisplayVk::waitClient(const gl::Context *context)
 {
     ANGLE_TRACE_EVENT0("gpu.angle", "DisplayVk::waitClient");
     ContextVk *contextVk = vk::GetImpl(context);
-    return angle::ToEGL(contextVk->finishImpl(RenderPassClosureReason::EGLWaitClient),
-                        EGL_BAD_ACCESS);
+    return angle::ToEGL(contextVk->finishImpl(QueueSubmitReason::EGLWaitClient), EGL_BAD_ACCESS);
 }
 
 egl::Error DisplayVk::waitNative(const gl::Context *context, EGLint engine)
@@ -559,8 +558,8 @@ void DisplayVk::generateExtensions(egl::DisplayExtensions *outExtensions) const
     // also be exposed.  The Vulkan extensions that support these EGL extensions are not split in
     // the same way; both Vulkan extensions are needed for EGL_EXT_image_dma_buf_import, and with
     // both Vulkan extensions, EGL_EXT_image_dma_buf_import_modifiers is also supportable.
-    outExtensions->imageDmaBufImportEXT =
-        getFeatures().supportsExternalMemoryDmaBufAndModifiers.enabled;
+    outExtensions->imageDmaBufImportEXT = getFeatures().supportsExternalMemoryDmaBuf.enabled &&
+                                          getFeatures().supportsImageDrmFormatModifier.enabled;
     outExtensions->imageDmaBufImportModifiersEXT = outExtensions->imageDmaBufImportEXT;
 
     // Disable context priority when non-zero memory init is enabled. This enforces a queue order.
@@ -571,13 +570,9 @@ void DisplayVk::generateExtensions(egl::DisplayExtensions *outExtensions) const
     outExtensions->nativeFenceSyncANDROID = getFeatures().supportsAndroidNativeFenceSync.enabled;
 #endif  // defined(ANGLE_PLATFORM_ANDROID) || defined(ANGLE_PLATFORM_LINUX)
 
-#if defined(ANGLE_PLATFORM_GGP)
-    outExtensions->ggpStreamDescriptor = true;
-    outExtensions->swapWithFrameToken  = getFeatures().supportsGGPFrameToken.enabled;
-#endif  // defined(ANGLE_PLATFORM_GGP)
-
     outExtensions->bufferAgeEXT = true;
 
+    outExtensions->presentationTime    = getFeatures().supportsTimestampSurfaceAttribute.enabled;
     outExtensions->protectedContentEXT = (getFeatures().supportsProtectedMemory.enabled &&
                                           getFeatures().supportsSurfaceProtectedSwapchains.enabled);
 
@@ -623,6 +618,9 @@ void DisplayVk::generateExtensions(egl::DisplayExtensions *outExtensions) const
 
     outExtensions->surfaceCompressionEXT =
         getFeatures().supportsImageCompressionControlSwapchain.enabled;
+
+    outExtensions->contextPriorityRealtimeNV = (getFeatures().supportsGlobalPriority.enabled &&
+                                                getFeatures().supportsGlobalPriorityQuery.enabled);
 }
 
 void DisplayVk::generateCaps(egl::Caps *outCaps) const
@@ -729,8 +727,8 @@ egl::Error DisplayVk::querySupportedCompressionRates(const egl::Config *configur
         vk::GetVkFormatFromFormatID(mRenderer, format.getActualRenderableImageFormatID());
     imageFormatInfo.type   = VK_IMAGE_TYPE_2D;
     imageFormatInfo.tiling = VK_IMAGE_TILING_OPTIMAL;
-    imageFormatInfo.usage  = VK_IMAGE_USAGE_TRANSFER_SRC_BIT | VK_IMAGE_USAGE_TRANSFER_DST_BIT |
-                            VK_IMAGE_USAGE_SAMPLED_BIT | VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
+    imageFormatInfo.usage  = vk::kImageUsageTransferBits | VK_IMAGE_USAGE_SAMPLED_BIT |
+                            VK_IMAGE_USAGE_COLOR_ATTACHMENT_BIT |
                             VK_IMAGE_USAGE_INPUT_ATTACHMENT_BIT;
 
     VkImageCompressionPropertiesEXT compressionProperties = {};

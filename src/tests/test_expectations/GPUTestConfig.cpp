@@ -277,6 +277,24 @@ inline bool IsAppleGPU()
     return angle::IsAppleGPU(GetActiveGPUVendorID());
 }
 
+// Check whether the active GPU is Qualcomm.
+inline bool IsQualcomm()
+{
+    return angle::IsQualcomm(GetActiveGPUVendorID());
+}
+
+// Check whether the active GPU is Samsung
+inline bool IsSamsung()
+{
+    return angle::IsSamsung(GetActiveGPUVendorID());
+}
+
+// Check whether the active GPU is ARM.
+inline bool IsARM()
+{
+    return angle::IsARM(GetActiveGPUVendorID());
+}
+
 // Check whether this is a debug build.
 inline bool IsDebug()
 {
@@ -384,7 +402,7 @@ inline bool IsGalaxyS23()
 
 inline bool IsGalaxyS24Exynos()
 {
-    return IsAndroidDevice("SM-S926B");
+    return IsAndroidDevice("SM-S926B") || IsAndroidDevice("SM-S721U1");
 }
 
 inline bool IsGalaxyS24Qualcomm()
@@ -456,6 +474,12 @@ inline bool IsVulkan(const GPUTestConfig::API &api)
     return (api == GPUTestConfig::kAPIVulkan) || (api == GPUTestConfig::kAPISwiftShader);
 }
 
+// Check whether the backend API has been set to ANGLE Native in the constructor
+inline bool IsNative(const GPUTestConfig::API &api)
+{
+    return (api == GPUTestConfig::kAPINative);
+}
+
 inline bool IsSwiftShader(const GPUTestConfig::API &api)
 {
     return (api == GPUTestConfig::kAPISwiftShader);
@@ -506,6 +530,9 @@ GPUTestConfig::GPUTestConfig(bool isSwiftShader)
     mConditions[kConditionIntel]       = !isSwiftShader && IsIntel();
     mConditions[kConditionVMWare]      = !isSwiftShader && IsVMWare();
     mConditions[kConditionApple]       = !isSwiftShader && IsAppleGPU();
+    mConditions[kConditionQualcomm]    = !isSwiftShader && IsQualcomm();
+    mConditions[kConditionARM]         = !isSwiftShader && IsARM();
+    mConditions[kConditionSamsung]     = !isSwiftShader && IsSamsung();
     mConditions[kConditionSwiftShader] = isSwiftShader;
 
     mConditions[kConditionRelease] = IsRelease();
@@ -518,6 +545,7 @@ GPUTestConfig::GPUTestConfig(bool isSwiftShader)
     mConditions[kConditionVulkan]    = true;
     mConditions[kConditionMetal]     = true;
     mConditions[kConditionWgpu]      = true;
+    mConditions[kConditionNative]    = true;
 
     // Devices are irrelevant if we are running on SW
     mConditions[kConditionNexus5X]          = !isSwiftShader && IsNexus5X();
@@ -548,6 +576,14 @@ GPUTestConfig::GPUTestConfig(bool isSwiftShader)
     mConditions[kConditionASan]  = IsASan();
     mConditions[kConditionTSan]  = IsTSan();
     mConditions[kConditionUBSan] = IsUBSan();
+
+#ifdef ANGLE_IR
+    // The IR can be disabled at runtime, but we can't detect that.  For the purposes of test
+    // expectations, especially for deqp, assume that if the IR is built, it's used.
+    mConditions[kConditionIR] = true;
+#else
+    mConditions[kConditionIR] = false;
+#endif
 }
 
 // If the constructor is passed an API, load those conditions as well
@@ -561,6 +597,7 @@ GPUTestConfig::GPUTestConfig(const API &api, uint32_t preRotation)
     mConditions[kConditionVulkan]    = IsVulkan(api);
     mConditions[kConditionMetal]     = IsMetal(api);
     mConditions[kConditionWgpu]      = IsWgpu(api);
+    mConditions[kConditionNative]    = IsNative(api);
 
     switch (preRotation)
     {

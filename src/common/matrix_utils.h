@@ -2,7 +2,7 @@
 // Copyright 2015 The ANGLE Project Authors. All rights reserved.
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
-//
+
 // Matrix:
 //   Utility class implementing various matrix operations.
 //   Supports matrices with minimum 2 and maximum 4 number of rows/columns.
@@ -14,11 +14,17 @@
 #ifndef COMMON_MATRIX_UTILS_H_
 #define COMMON_MATRIX_UTILS_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <array>
+#include <utility>
 #include <vector>
 
 #include "common/debug.h"
 #include "common/mathutil.h"
+#include "common/span.h"
 #include "common/vector_utils.h"
 
 namespace
@@ -84,26 +90,28 @@ template <typename T>
 class Matrix
 {
   public:
-    Matrix(const std::vector<T> &elements, const unsigned int numRows, const unsigned int numCols)
-        : mElements(elements), mRows(numRows), mCols(numCols)
+    Matrix(std::vector<T> &&elements, const unsigned int numRows, const unsigned int numCols)
+        : mElements(std::move(elements)), mRows(numRows), mCols(numCols)
     {
         ASSERT(rows() >= 1 && rows() <= 4);
         ASSERT(columns() >= 1 && columns() <= 4);
+        ASSERT(mElements.size() >= rows() * columns());
     }
 
-    Matrix(const std::vector<T> &elements, const unsigned int size)
-        : mElements(elements), mRows(size), mCols(size)
+    Matrix(std::vector<T> &&elements, const unsigned int size)
+        : mElements(std::move(elements)), mRows(size), mCols(size)
     {
         ASSERT(rows() >= 1 && rows() <= 4);
         ASSERT(columns() >= 1 && columns() <= 4);
+        ASSERT(mElements.size() >= rows() * columns());
     }
 
-    Matrix(const T *elements, const unsigned int size) : mRows(size), mCols(size)
+    Matrix(angle::Span<const T> elements, const unsigned int size)
+        : mElements(elements.begin(), elements.end()), mRows(size), mCols(size)
     {
         ASSERT(rows() >= 1 && rows() <= 4);
         ASSERT(columns() >= 1 && columns() <= 4);
-        for (size_t i = 0; i < size * size; i++)
-            mElements.push_back(elements[i]);
+        ASSERT(mElements.size() >= rows() * columns());
     }
 
     const T &operator()(const unsigned int rowIndex, const unsigned int columnIndex) const
@@ -161,10 +169,10 @@ class Matrix
     {
         ASSERT(columns() == m.columns());
         ASSERT(rows() == m.rows());
-        return mElements == m.elements();
+        return elements() == m.elements();
     }
 
-    bool operator!=(const Matrix<T> &m) const { return !(mElements == m.elements()); }
+    bool operator!=(const Matrix<T> &m) const { return !(elements() == m.elements()); }
 
     bool nearlyEqual(T epsilon, const Matrix<T> &m) const
     {
@@ -186,10 +194,9 @@ class Matrix
     }
 
     unsigned int rows() const { return mRows; }
-
     unsigned int columns() const { return mCols; }
 
-    std::vector<T> elements() const { return mElements; }
+    angle::Span<const T> elements() const { return mElements; }
     T *data() { return mElements.data(); }
     const T *constData() const { return mElements.data(); }
 

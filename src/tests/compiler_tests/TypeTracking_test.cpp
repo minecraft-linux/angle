@@ -25,7 +25,6 @@ class TypeTrackingTest : public testing::Test
     {
         ShBuiltInResources resources;
         InitBuiltInResources(&resources);
-        resources.FragmentPrecisionHigh = 1;
 
         mTranslator = new TranslatorESSL(GL_FRAGMENT_SHADER, SH_GLES3_1_SPEC);
         ASSERT_TRUE(mTranslator->Init(resources));
@@ -39,7 +38,7 @@ class TypeTrackingTest : public testing::Test
         compileOptions.intermediateTree = true;
 
         const char *shaderStrings[] = {shaderString.c_str()};
-        bool compilationSuccess     = mTranslator->compile(shaderStrings, 1, compileOptions);
+        bool compilationSuccess     = mTranslator->compile(shaderStrings, compileOptions);
         TInfoSink &infoSink         = mTranslator->getInfoSink();
         mInfoLog                    = RemoveSymbolIdsFromInfoLog(infoSink.info.c_str());
         if (!compilationSuccess)
@@ -677,13 +676,14 @@ void main()
 }
 )";
     const char kExpected[] = R"(0:2: Code block
-0:3:   Declaration
-0:3:     'o' (out highp 4-component vector of float)
 0:6:   Declaration
-0:? :     '' (structure 's2' (specifier))
+0:?:     '' (structure 's2' (specifier))
+0:?:       member: 'i' (mediump int)
 0:10:   Declaration
 0:10:     initialize first child with second child (const structure 's1' (specifier))
 0:10:       's11' (const structure 's1' (specifier))
+0:10:         member: 'ss' (structure 's2')
+0:10:         member: 'm' (highp 4X4 matrix of float)
 0:10:       Construct (const structure 's1')
 0:10:         Constant union (const structure 's2' (specifier))
 0:10:           8 (const int)
@@ -704,6 +704,8 @@ void main()
 0:10:           0.0 (const float)
 0:10:           0.0 (const float)
 0:10:           5.0 (const float)
+0:3:   Declaration
+0:3:     'o' (out highp 4-component vector of float)
 0:11:   Function Definition:
 0:11:     Function Prototype: 'f' (structure 's1')
 0:11:       parameter: 's' (in structure 's1')
@@ -718,8 +720,12 @@ void main()
 0:17:           Compare Equal (bool)
 0:17:             Call a function: 'f' (structure 's1')
 0:17:               's11' (const structure 's1' (specifier))
+0:17:                 member: 'ss' (structure 's2')
+0:17:                 member: 'm' (highp 4X4 matrix of float)
 0:17:             Call a function: 'f' (structure 's1')
 0:17:               's11' (const structure 's1' (specifier))
+0:17:                 member: 'ss' (structure 's2')
+0:17:                 member: 'm' (highp 4X4 matrix of float)
 0:17:         true case
 0:18:           Code block
 0:18:             move second child to first child (highp 4-component vector of float)
@@ -761,13 +767,17 @@ void main()
 0:8:       Declaration
 0:8:         initialize first child with second child (structure 's2' (specifier))
 0:8:           's22' (structure 's2' (specifier))
+0:8:             member: 'i' (mediump int)
 0:8:           Constant union (const structure 's2')
 0:8:             8 (const int)
 0:12:       Declaration
 0:12:         initialize first child with second child (structure 's1' (specifier))
 0:12:           's11' (structure 's1' (specifier))
+0:12:             member: 'ss' (structure 's2')
+0:12:             member: 'm' (highp 4X4 matrix of float)
 0:12:           Construct (structure 's1')
 0:12:             's22' (structure 's2' (specifier))
+0:12:               member: 'i' (mediump int)
 0:12:             Constant union (const 4X4 matrix of float)
 0:12:               5.0 (const float)
 0:12:               0.0 (const float)
@@ -787,12 +797,20 @@ void main()
 0:12:               5.0 (const float)
 0:13:       move second child to first child (structure 's1' (specifier))
 0:13:         's11' (structure 's1' (specifier))
+0:13:           member: 'ss' (structure 's2')
+0:13:           member: 'm' (highp 4X4 matrix of float)
 0:13:         's11' (structure 's1' (specifier))
+0:13:           member: 'ss' (structure 's2')
+0:13:           member: 'm' (highp 4X4 matrix of float)
 0:14:       If test
 0:14:         Condition
 0:14:           Compare Equal (bool)
 0:14:             's11' (structure 's1' (specifier))
+0:14:               member: 'ss' (structure 's2')
+0:14:               member: 'm' (highp 4X4 matrix of float)
 0:14:             's11' (structure 's1' (specifier))
+0:14:               member: 'ss' (structure 's2')
+0:14:               member: 'm' (highp 4X4 matrix of float)
 0:14:         true case
 0:15:           Code block
 0:15:             move second child to first child (highp 4-component vector of float)

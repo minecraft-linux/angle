@@ -283,6 +283,12 @@ class OffsetBindingPointer : public BindingPointer<ObjectType>
         updateOffsetAndSize(newObject, offset, size);
     }
 
+    void assignOffsetAndSize(GLintptr offset, GLsizeiptr size)
+    {
+        mOffset = offset;
+        mSize   = size;
+    }
+
   private:
     ANGLE_INLINE void updateOffsetAndSize(ObjectType *newObject, GLintptr offset, GLsizeiptr size)
     {
@@ -319,6 +325,11 @@ class SubjectBindingPointer : protected BindingPointer<SubjectT>, public angle::
 
     void bind(const Context *context, SubjectT *subject)
     {
+        if (subject == get())
+        {
+            return;
+        }
+
         // AddRef first in case subject == get()
         if (subject)
         {

@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 // BufferGL.cpp: Implements the class methods for BufferGL.
 
 #include "libANGLE/renderer/gl/BufferGL.h"
@@ -84,7 +88,8 @@ angle::Result BufferGL::setData(const gl::Context *context,
                                 gl::BufferBinding target,
                                 const void *data,
                                 size_t size,
-                                gl::BufferUsage usage)
+                                gl::BufferUsage usage,
+                                BufferFeedback *feedback)
 {
     ContextGL *contextGL         = GetImplAs<ContextGL>(context);
     const FunctionsGL *functions = GetFunctionsGL(context);
@@ -123,7 +128,8 @@ angle::Result BufferGL::setSubData(const gl::Context *context,
                                    gl::BufferBinding target,
                                    const void *data,
                                    size_t size,
-                                   size_t offset)
+                                   size_t offset,
+                                   BufferFeedback *feedback)
 {
     ContextGL *contextGL         = GetImplAs<ContextGL>(context);
     const FunctionsGL *functions = GetFunctionsGL(context);
@@ -147,7 +153,8 @@ angle::Result BufferGL::copySubData(const gl::Context *context,
                                     BufferImpl *source,
                                     GLintptr sourceOffset,
                                     GLintptr destOffset,
-                                    GLsizeiptr size)
+                                    GLsizeiptr size,
+                                    BufferFeedback *feedback)
 {
     ContextGL *contextGL         = GetImplAs<ContextGL>(context);
     const FunctionsGL *functions = GetFunctionsGL(context);
@@ -178,7 +185,10 @@ angle::Result BufferGL::copySubData(const gl::Context *context,
     return angle::Result::Continue;
 }
 
-angle::Result BufferGL::map(const gl::Context *context, GLenum access, void **mapPtr)
+angle::Result BufferGL::map(const gl::Context *context,
+                            GLenum access,
+                            void **mapPtr,
+                            BufferFeedback *feedback)
 {
     ContextGL *contextGL         = GetImplAs<ContextGL>(context);
     const FunctionsGL *functions = GetFunctionsGL(context);
@@ -223,7 +233,8 @@ angle::Result BufferGL::mapRange(const gl::Context *context,
                                  size_t offset,
                                  size_t length,
                                  GLbitfield access,
-                                 void **mapPtr)
+                                 void **mapPtr,
+                                 BufferFeedback *feedback)
 {
     ContextGL *contextGL         = GetImplAs<ContextGL>(context);
     const FunctionsGL *functions = GetFunctionsGL(context);
@@ -255,7 +266,9 @@ angle::Result BufferGL::mapRange(const gl::Context *context,
     return angle::Result::Continue;
 }
 
-angle::Result BufferGL::unmap(const gl::Context *context, GLboolean *result)
+angle::Result BufferGL::unmap(const gl::Context *context,
+                              GLboolean *result,
+                              BufferFeedback *feedback)
 {
     ContextGL *contextGL         = GetImplAs<ContextGL>(context);
     const FunctionsGL *functions = GetFunctionsGL(context);
@@ -320,7 +333,7 @@ angle::Result BufferGL::getIndexRange(const gl::Context *context,
         else
         {
             // Workaround the null driver not having map support.
-            *outRange = gl::IndexRange(0, 0, 1);
+            *outRange = gl::IndexRange(0, 0);
         }
     }
 

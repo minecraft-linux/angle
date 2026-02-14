@@ -80,7 +80,7 @@ bool compileTestShader(GLenum type,
 
     ShCompileOptions options = compileOptions;
     options.objectCode       = true;
-    bool compilationSuccess  = translator->compile(shaderStrings, 1, options);
+    bool compilationSuccess  = translator->compile(shaderStrings, options);
     TInfoSink &infoSink      = translator->getInfoSink();
     if (translatedCode)
     {
@@ -104,7 +104,6 @@ bool compileTestShader(GLenum type,
 {
     ShBuiltInResources resources;
     sh::InitBuiltInResources(&resources);
-    resources.FragmentPrecisionHigh = 1;
     return compileTestShader(type, spec, output, shaderString, &resources, compileOptions,
                              translatedCode, infoLog);
 }
@@ -113,7 +112,6 @@ MatchOutputCodeTest::MatchOutputCodeTest(GLenum shaderType, ShShaderOutput outpu
     : mShaderType(shaderType), mDefaultCompileOptions{}
 {
     sh::InitBuiltInResources(&mResources);
-    mResources.FragmentPrecisionHigh = 1;
     mOutputCode[outputType]          = std::string();
 }
 
@@ -143,8 +141,15 @@ void MatchOutputCodeTest::compile(const std::string &shaderString,
     std::string infoLog;
     for (auto &code : mOutputCode)
     {
+        const ShShaderOutput output = code.first;
+        ShCompileOptions options    = compileOptions;
+        if (output == SH_SPIRV_VULKAN_OUTPUT || output == SH_MSL_METAL_OUTPUT)
+        {
+            options.removeInactiveVariables = true;
+        }
+
         bool compilationSuccess =
-            compileWithSettings(code.first, shaderString, compileOptions, &code.second, &infoLog);
+            compileWithSettings(output, shaderString, options, &code.second, &infoLog);
         if (!compilationSuccess)
         {
             FAIL() << "Shader compilation failed:\n" << infoLog;

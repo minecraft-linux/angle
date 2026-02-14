@@ -9,12 +9,17 @@
 #ifndef COMMON_UTILITIES_H_
 #define COMMON_UTILITIES_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GLSLANG/ShaderLang.h>
 
 #include <math.h>
 #include <string>
+#include <string_view>
 #include <vector>
 
 #include "angle_gl.h"
@@ -46,6 +51,8 @@ bool IsImage2DType(GLenum type);
 bool IsAtomicCounterType(GLenum type);
 bool IsOpaqueType(GLenum type);
 bool IsMatrixType(GLenum type);
+bool IsFloatScalarAndVectorType(GLenum type);
+bool IsFloatVectorType(GLenum type);
 GLenum TransposeMatrixType(GLenum type);
 int VariableRegisterCount(GLenum type);
 int MatrixRegisterCount(GLenum type, bool isRowMajorMatrix);
@@ -384,7 +391,7 @@ void FillWithNullptr(T *array)
 }
 }  // namespace angle
 
-void writeFile(const char *path, const void *data, size_t size);
+void writeFile(const char *path, std::string_view content);
 
 // Get the underlying type. Useful for indexing into arrays with enum values by avoiding the clutter
 // of the extraneous static_cast<>() calls.

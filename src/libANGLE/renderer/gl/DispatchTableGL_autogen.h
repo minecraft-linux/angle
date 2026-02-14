@@ -827,8 +827,9 @@ class DispatchTableGL : angle::NonCopyable
     PFNGLTEXBUFFEROESPROC texBufferOES = nullptr;
     PFNGLTEXBUFFERRANGEOESPROC texBufferRangeOES = nullptr;
 
-    // GL_OVR_multiview2
+    // GL_OVR_multiview
     PFNGLFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC framebufferTextureMultiviewOVR = nullptr;
+    PFNGLNAMEDFRAMEBUFFERTEXTUREMULTIVIEWOVRPROC namedFramebufferTextureMultiviewOVR = nullptr;
 
     // GL_QCOM_tiled_rendering
     PFNGLENDTILINGQCOMPROC endTilingQCOM = nullptr;
@@ -844,13 +845,6 @@ class DispatchTableGL : angle::NonCopyable
     void initProcsDesktopGL(const gl::Version &version, const std::set<std::string> &extensions);
     void initProcsGLES(const gl::Version &version, const std::set<std::string> &extensions);
     void initProcsSharedExtensions(const std::set<std::string> &extensions);
-
-#if defined(ANGLE_ENABLE_OPENGL_NULL)
-    void initProcsDesktopGLNULL(const gl::Version &version,
-                                const std::set<std::string> &extensions);
-    void initProcsGLESNULL(const gl::Version &version, const std::set<std::string> &extensions);
-    void initProcsSharedExtensionsNULL(const std::set<std::string> &extensions);
-#endif  // defined(ANGLE_ENABLE_OPENGL_NULL)
 };
 
 }  // namespace rx

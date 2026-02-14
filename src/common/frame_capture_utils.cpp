@@ -7,6 +7,10 @@
 //   ANGLE Frame capture common classes.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "common/frame_capture_utils.h"
 
 namespace angle
@@ -27,16 +31,13 @@ ParamCapture::ParamCapture(const char *nameIn, ParamType typeIn)
     : name(nameIn),
       type(typeIn),
       enumGroup(gl::GLESEnum::AllEnums),
-      bigGLEnum(gl::BigGLEnum::AllEnums),
       uniqueID(nextID++)
 {}
 
 ParamCapture::~ParamCapture() = default;
 
 ParamCapture::ParamCapture(ParamCapture &&other)
-    : type(ParamType::TGLenum),
-      enumGroup(gl::GLESEnum::AllEnums),
-      bigGLEnum(gl::BigGLEnum::AllEnums)
+    : type(ParamType::TGLenum), enumGroup(gl::GLESEnum::AllEnums)
 {
     *this = std::move(other);
 }
@@ -47,7 +48,6 @@ ParamCapture &ParamCapture::operator=(ParamCapture &&other)
     std::swap(type, other.type);
     std::swap(value, other.value);
     std::swap(enumGroup, other.enumGroup);
-    std::swap(bigGLEnum, other.bigGLEnum);
     std::swap(data, other.data);
     std::swap(arrayClientPointerIndex, other.arrayClientPointerIndex);
     std::swap(readBufferSizeBytes, other.readBufferSizeBytes);
@@ -196,7 +196,7 @@ void WriteParamValueReplay<ParamType::TGLboolean>(std::ostream &os,
             os << "GL_FALSE";
             break;
         default:
-            os << "0x" << std::hex << std::uppercase << GLint(value);
+            os << "0x" << std::hex << std::uppercase << GLint(value) << std::dec;
     }
 }
 
@@ -466,7 +466,7 @@ void WriteParamValueReplay<ParamType::TUniformLocation>(std::ostream &os,
     }
     else
     {
-        os << "gCurrentProgram";
+        os << "gCurrentProgramPerContext[gCurrentContext]";
     }
 
     os << "][" << value.value << "]";
@@ -679,7 +679,7 @@ void WriteParamValueReplay<ParamType::TcharConstPointer>(std::ostream &os,
     }
     else
     {
-        os << NULL;
+        os << "NULL";
     }
 }
 

@@ -49,6 +49,11 @@ angle::Result ContextImpl::handleNoopDrawEvent()
     return angle::Result::Continue;
 }
 
+angle::Result ContextImpl::handleNoopMultiDrawEvent()
+{
+    return angle::Result::Continue;
+}
+
 void ContextImpl::setMemoryProgramCache(gl::MemoryProgramCache *memoryProgramCache)
 {
     mMemoryProgramCache = memoryProgramCache;
@@ -98,9 +103,22 @@ angle::Result ContextImpl::releaseTextures(const gl::Context *context,
     return angle::Result::Stop;
 }
 
+const angle::PerfMonitorCounterGroupsInfo &ContextImpl::getPerfMonitorCountersInfo() const
+{
+    static angle::base::NoDestructor<angle::PerfMonitorCounterGroupsInfo> sCountersInfo;
+    return *sCountersInfo;
+}
+
 const angle::PerfMonitorCounterGroups &ContextImpl::getPerfMonitorCounters()
 {
     static angle::base::NoDestructor<angle::PerfMonitorCounterGroups> sCounters;
     return *sCounters;
+}
+
+const angle::ShadingRateMap &ContextImpl::getSupportedFragmentShadingRateEXTSampleCounts() const
+{
+    UNREACHABLE();
+    static angle::ShadingRateMap empty;
+    return empty;
 }
 }  // namespace rx

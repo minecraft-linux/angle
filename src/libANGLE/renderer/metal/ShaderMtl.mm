@@ -68,6 +68,8 @@ std::shared_ptr<ShaderTranslateTask> ShaderMtl::compile(const gl::Context *conte
 
     options->separateCompoundStructDeclarations = true;
 
+    options->forceDeferNonConstGlobalInitializers = true;
+
     if (context->isWebGL() && mState.getShaderType() != gl::ShaderType::Compute)
     {
         options->initOutputVariables = true;
@@ -75,12 +77,6 @@ std::shared_ptr<ShaderTranslateTask> ShaderMtl::compile(const gl::Context *conte
 
     options->metal.generateShareableShaders =
         displayMtl->getFeatures().generateShareableShaders.enabled;
-
-    if (displayMtl->getFeatures().intelExplicitBoolCastWorkaround.enabled ||
-        options->metal.generateShareableShaders)
-    {
-        options->addExplicitBoolCasts = true;
-    }
 
     options->clampPointSize = true;
 #if TARGET_OS_IPHONE && !TARGET_OS_MACCATALYST
@@ -91,6 +87,8 @@ std::shared_ptr<ShaderTranslateTask> ShaderMtl::compile(const gl::Context *conte
     {
         options->emulateAlphaToCoverage = true;
     }
+
+    options->removeInactiveVariables = true;
 
     // Constants:
     options->metal.driverUniformsBindingIndex    = mtl::kDriverUniformsBindingIndex;
@@ -112,6 +110,10 @@ std::shared_ptr<ShaderTranslateTask> ShaderMtl::compile(const gl::Context *conte
     {
         options->metal.injectAsmStatementIntoLoopBodies = true;
     }
+    if (displayMtl->getFeatures().ensureLoopForwardProgress.enabled)
+    {
+        options->ensureLoopForwardProgress = true;
+    }
 
     return std::shared_ptr<ShaderTranslateTask>(new ShaderTranslateTaskMtl(mCompiledState));
 }
@@ -125,7 +127,7 @@ std::shared_ptr<ShaderTranslateTask> ShaderMtl::load(const gl::Context *context,
 
 std::string ShaderMtl::getDebugInfo() const
 {
-    return mState.getCompiledState()->translatedSource;
+    return *mState.getCompiledState()->translatedSource;
 }
 
 }  // namespace rx

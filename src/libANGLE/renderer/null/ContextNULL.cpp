@@ -91,6 +91,7 @@ ContextNULL::ContextNULL(const gl::State &state,
 
     mExtensions.textureStorageEXT               = true;
     mExtensions.rgb8Rgba8OES                    = true;
+    mExtensions.colorBufferFloatEXT             = state.getClientVersion() >= gl::Version(3, 0);
     mExtensions.textureCompressionDxt1EXT       = true;
     mExtensions.textureCompressionDxt3ANGLE     = true;
     mExtensions.textureCompressionDxt5ANGLE     = true;
@@ -464,9 +465,10 @@ BufferImpl *ContextNULL::createBuffer(const gl::BufferState &state)
     return new BufferNULL(state, mAllocationTracker);
 }
 
-VertexArrayImpl *ContextNULL::createVertexArray(const gl::VertexArrayState &data)
+VertexArrayImpl *ContextNULL::createVertexArray(const gl::VertexArrayState &data,
+                                                const gl::VertexArrayBuffers &vertexArrayBuffers)
 {
-    return new VertexArrayNULL(data);
+    return new VertexArrayNULL(data, vertexArrayBuffers);
 }
 
 QueryImpl *ContextNULL::createQuery(gl::QueryType type)

@@ -218,6 +218,9 @@ struct Extensions
     // GL_OES_draw_elements_base_vertex
     bool drawElementsBaseVertexOES = false;
 
+    // GL_EXT_draw_instanced
+    bool drawInstancedEXT = false;
+
     // GL_OES_EGL_image
     bool EGLImageOES = false;
 
@@ -266,6 +269,15 @@ struct Extensions
     // GL_EXT_frag_depth
     bool fragDepthEXT = false;
 
+    // GL_EXT_fragment_shading_rate
+    bool fragmentShadingRateEXT = false;
+
+    // GL_EXT_fragment_shading_rate_attachment
+    bool fragmentShadingRateAttachmentEXT = false;
+
+    // GL_EXT_fragment_shading_rate_primitive
+    bool fragmentShadingRatePrimitiveEXT = false;
+
     // GL_ANGLE_framebuffer_blit
     bool framebufferBlitANGLE = false;
 
@@ -311,6 +323,9 @@ struct Extensions
     // GL_EXT_memory_object_fd
     bool memoryObjectFdEXT = false;
 
+    // GL_EXT_multi_draw_arrays
+    bool multiDrawArraysEXT = false;
+
     // GL_EXT_multi_draw_indirect
     bool multiDrawIndirectEXT = false;
 
@@ -328,6 +343,9 @@ struct Extensions
 
     // GL_OVR_multiview2
     bool multiview2OVR = false;
+
+    // GL_OVR_multiview_multisampled_render_to_texture
+    bool multiviewMultisampledRenderToTextureOVR = false;
 
     // GL_KHR_no_error
     bool noErrorKHR = false;
@@ -461,6 +479,9 @@ struct Extensions
     // GL_EXT_shader_texture_lod
     bool shaderTextureLodEXT = false;
 
+    // GL_EXT_shader_texture_samples
+    bool shaderTextureSamplesEXT = false;
+
     // GL_QCOM_shading_rate
     bool shadingRateQCOM = false;
 
@@ -478,9 +499,6 @@ struct Extensions
 
     // GL_OES_surfaceless_context
     bool surfacelessContextOES = false;
-
-    // GL_ARB_sync
-    bool syncARB = false;
 
     // GL_EXT_tessellation_shader
     bool tessellationShaderEXT = false;
@@ -616,6 +634,9 @@ struct Extensions
 
     // GL_EXT_texture_type_2_10_10_10_REV
     bool textureType2101010REVEXT = false;
+
+    // GL_ARM_texture_unnormalized_coordinates
+    bool textureUnnormalizedCoordinatesARM = false;
 
     // GL_ANGLE_texture_usage
     bool textureUsageANGLE = false;
@@ -778,9 +799,6 @@ struct Extensions
 
     // GL_ANGLE_stencil_texturing
     bool stencilTexturingANGLE = false;
-
-    // GL_CHROMIUM_sync_query
-    bool syncQueryCHROMIUM = false;
 
     // GL_ANGLE_texture_compression_dxt3
     bool textureCompressionDxt3ANGLE = false;

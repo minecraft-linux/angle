@@ -26,7 +26,7 @@
 
 // Version number for shader translation API.
 // It is incremented every time the API changes.
-#define ANGLE_SH_VERSION 371
+#define ANGLE_SH_VERSION 396
 
 enum ShShaderSpec
 {
@@ -37,7 +37,6 @@ enum ShShaderSpec
     SH_WEBGL2_SPEC,
 
     SH_GLES3_1_SPEC,
-    SH_WEBGL3_SPEC,
 
     SH_GLES3_2_SPEC,
 };
@@ -114,6 +113,7 @@ enum class ShPixelLocalStorageFormat : uint8_t
     RGBA8I,
     RGBA8UI,
     R32F,
+    R32I,
     R32UI,
 };
 
@@ -147,11 +147,6 @@ struct ShPixelLocalStorageOptions
     // ShPixelLocalStorageType::ImageLoadStore only: Can we use rgba8/rgba8i/rgba8ui image formats?
     // Or do we need to manually pack and unpack from r32i/r32ui?
     bool supportsNativeRGBA8ImageFormats = false;
-
-    // anglebug.com/42266263 -- Metal [[raster_order_group()]] does not work for read_write textures
-    // on AMD when the render pass doesn't have a color attachment on slot 0. To work around this we
-    // attach one of the PLS textures to GL_COLOR_ATTACHMENT0, if there isn't one already.
-    bool renderPassNeedsAMDRasterOrderGroupsWorkaround = false;
 };
 
 struct ShCompileOptions
@@ -230,7 +225,8 @@ struct ShCompileOptions
     uint64_t unfoldShortCircuit : 1;
 
     // This flag initializes output variables to 0 at the beginning of main().  It is to avoid
-    // undefined behaviors.
+    // undefined behaviors. Additionally, it is intended as a workaround for drivers which get
+    // context lost if gl_FragColor is not written.
     uint64_t initOutputVariables : 1;
 
     // This flag scalarizes vec/ivec/bvec/mat constructor args.  It is intended as a workaround for
@@ -240,10 +236,6 @@ struct ShCompileOptions
     // This flag overwrites a struct name with a unique prefix.  It is intended as a workaround for
     // drivers that do not handle struct scopes correctly, including all Mac drivers and Linux AMD.
     uint64_t regenerateStructNames : 1;
-
-    // This flag works around bugs in Mac drivers related to do-while by transforming them into an
-    // other construct.
-    uint64_t rewriteDoWhileLoops : 1;
 
     // This flag works around a bug in the HLSL compiler optimizer that folds certain constant pow
     // expressions incorrectly. Only applies to the HLSL back-end. It works by expanding the integer
@@ -282,10 +274,6 @@ struct ShCompileOptions
     // of a named uniform block declared with a shared or std140 layout qualifier to be considered
     // active. The uniform block itself is also considered active.
     uint64_t useUnusedStandardSharedBlocks : 1;
-
-    // This flag works around a bug in unary minus operator on float numbers on Intel Mac OSX 10.11
-    // drivers. It works by translating -float into 0.0 - float.
-    uint64_t rewriteFloatUnaryMinusOperator : 1;
 
     // This flag works around a bug in evaluating atan(y, x) on some NVIDIA OpenGL drivers.  It
     // works by using an expression to emulate this function.
@@ -348,12 +336,9 @@ struct ShCompileOptions
     // read undefined values that could be coming from another webpage/application.
     uint64_t initSharedVariables : 1;
 
-    // Forces the value returned from an atomic operations to be always be resolved. This is
-    // targeted to workaround a bug in NVIDIA D3D driver where the return value from
-    // RWByteAddressBuffer.InterlockedAdd does not get resolved when used in the .yzw components of
-    // a RWByteAddressBuffer.Store operation. Only has an effect on HLSL translation.
-    // http://anglebug.com/42261924
-    uint64_t forceAtomicValueResolution : 1;
+    // For MSL, non-const global variables cannot have an initializer, even if the initializer is
+    // constant.  Initialization of these variables is deferred to the beginning of main.
+    uint64_t forceDeferNonConstGlobalInitializers : 1;
 
     // Rewrite gl_BaseVertex and gl_BaseInstance as uniform int
     uint64_t emulateGLBaseVertexBaseInstance : 1;
@@ -394,10 +379,7 @@ struct ShCompileOptions
     // VK_EXT_depth_clip_control is supported, this code is not generated, saving a uniform look up.
     uint64_t addVulkanDepthCorrection : 1;
 
-    uint64_t forceShaderPrecisionHighpToMediump : 1;
-
-    // Allow compiler to use specialization constant to do pre-rotation and y flip.
-    uint64_t useSpecializationConstant : 1;
+    uint64_t unused2 : 1;
 
     // Ask compiler to generate Vulkan transform feedback emulation support code.
     uint64_t addVulkanXfbEmulationSupportCode : 1;
@@ -406,16 +388,15 @@ struct ShCompileOptions
     // VK_EXT_transform_feedback extension.
     uint64_t addVulkanXfbExtensionSupportCode : 1;
 
-    // This flag initializes fragment shader's output variables to zero at the beginning of the
-    // fragment shader's main(). It is intended as a workaround for drivers which get context lost
-    // if gl_FragColor is not written.
-    uint64_t initFragmentOutputVariables : 1;
+    // Reject shaders with variables that go above set limits; 2GB for uniform buffer objects, 64KB
+    // for private variables and 16MB for the total size of private variables.
+    uint64_t rejectWebglShadersWithLargeVariables : 1;
 
     // Always write explicit location layout qualifiers for fragment outputs.
     uint64_t explicitFragmentLocations : 1;
 
-    // Insert explicit casts for float/double/unsigned/signed int on macOS 10.15 with Intel driver
-    uint64_t addExplicitBoolCasts : 1;
+    // Dithering is emulated by injecting code in the fragment shader
+    uint64_t emulateDithering : 1;
 
     // Add round() after applying dither.  This works around a Qualcomm quirk where values can get
     // ceil()ed instead.
@@ -474,6 +455,24 @@ struct ShCompileOptions
     // Specify struct in one statement, declare instance in other.
     uint64_t separateCompoundStructDeclarations : 1;
 
+    // Whether to preserve denorm floats in the lexer or convert to zero
+    uint64_t preserveDenorms : 1;
+
+    // Whether inactive shader variables from the output.
+    uint64_t removeInactiveVariables : 1;
+
+    // Ensure all loops execute side-effects or terminate.
+    uint64_t ensureLoopForwardProgress : 1;
+
+    // Do not preform any shader validation or perform any shader transformations. Shader state can
+    // still be reflected.
+    uint64_t skipAllValidationAndTransforms : 1;
+
+    uint64_t transformFloatUniformTo16Bits : 1;
+
+    // Whether the ANGLE IR should be used.  Ineffective if ANGLE is built without IR support.
+    uint64_t useIR : 1;
+
     ShCompileOptionsMetal metal;
     ShPixelLocalStorageOptions pls;
 };
@@ -501,6 +500,10 @@ struct ShBuiltInResources
     int MaxTextureImageUnits;
     int MaxFragmentUniformVectors;
     int MaxDrawBuffers;
+    int ShadingRateFlag2VerticalPixelsEXT;
+    int ShadingRateFlag4VerticalPixelsEXT;
+    int ShadingRateFlag2HorizontalPixelsEXT;
+    int ShadingRateFlag4HorizontalPixelsEXT;
 
     // Extensions.
     // Set to 1 to enable the extension, else 0.
@@ -516,7 +519,6 @@ struct ShBuiltInResources
     int EXT_shader_texture_lod;
     int EXT_shader_framebuffer_fetch;
     int EXT_shader_framebuffer_fetch_non_coherent;
-    int NV_shader_framebuffer_fetch;
     int NV_shader_noperspective_interpolation;
     int ARM_shader_framebuffer_fetch;
     int ARM_shader_framebuffer_fetch_depth_stencil;
@@ -524,6 +526,8 @@ struct ShBuiltInResources
     int OVR_multiview2;
     int EXT_multisampled_render_to_texture;
     int EXT_multisampled_render_to_texture2;
+    int EXT_fragment_shading_rate;
+    int EXT_fragment_shading_rate_primitive;
     int EXT_YUV_target;
     int EXT_geometry_shader;
     int OES_geometry_shader;
@@ -537,7 +541,7 @@ struct ShBuiltInResources
     int ANGLE_shader_pixel_local_storage;
     int ANGLE_texture_multisample;
     int ANGLE_multi_draw;
-    // TODO(angleproject:3402) remove after chromium side removal to pass compilation
+    // TODO(http://anglebug.com/40096583) remove after chromium side removal to pass compilation
     int ANGLE_base_vertex_base_instance;
     int WEBGL_video_texture;
     int APPLE_clip_distance;
@@ -568,10 +572,7 @@ struct ShBuiltInResources
     // function. This applies to Tegra K1 devices.
     int NV_draw_buffers;
 
-    // Set to 1 if highp precision is supported in the ESSL 1.00 version of the
-    // fragment language. Does not affect versions of the language where highp
-    // support is mandatory.
-    // Default is 0.
+    // Unused, highp support is always assumed.
     int FragmentPrecisionHigh;
 
     // GLSL ES 3.0 constants.
@@ -594,6 +595,11 @@ struct ShBuiltInResources
     // Set a 64 bit hash function to enable user-defined name hashing.
     // Default is NULL.
     ShHashFunction64 HashFunction;
+
+    // User defined variables are prefixed with '_' and UserVariableNamePrefix. If UserVariableName
+    // is the null character, no prefixing is done and collisions between user variables and
+    // variables introduced during translation is possible.
+    char UserVariableNamePrefix;
 
     // The maximum complexity an expression can be when limitExpressionComplexity is turned on.
     int MaxExpressionComplexity;
@@ -694,7 +700,6 @@ struct ShBuiltInResources
 
     // EXT_geometry_shader constants
     int MaxGeometryUniformComponents;
-    int MaxGeometryUniformBlocks;
     int MaxGeometryInputComponents;
     int MaxGeometryOutputComponents;
     int MaxGeometryOutputVertices;
@@ -702,7 +707,6 @@ struct ShBuiltInResources
     int MaxGeometryTextureImageUnits;
     int MaxGeometryAtomicCounterBuffers;
     int MaxGeometryAtomicCounters;
-    int MaxGeometryShaderStorageBlocks;
     int MaxGeometryShaderInvocations;
     int MaxGeometryImageUniforms;
 
@@ -728,9 +732,6 @@ struct ShBuiltInResources
     int MaxTessEvaluationAtomicCounters;
     int MaxTessEvaluationAtomicCounterBuffers;
 
-    // Subpixel bits used in rasterization.
-    int SubPixelBits;
-
     // APPLE_clip_distance / EXT_clip_cull_distance / ANGLE_clip_cull_distance constants
     int MaxClipDistances;
     int MaxCullDistances;
@@ -738,7 +739,6 @@ struct ShBuiltInResources
 
     // ANGLE_shader_pixel_local_storage.
     int MaxPixelLocalStoragePlanes;
-    int MaxColorAttachmentsWithActivePixelLocalStorage;
     int MaxCombinedDrawBuffersAndPixelLocalStoragePlanes;
 };
 
@@ -894,17 +894,6 @@ uint32_t GetShaderSpecConstUsageBits(const ShHandle handle);
 bool CheckVariablesWithinPackingLimits(int maxVectors,
                                        const std::vector<sh::ShaderVariable> &variables);
 
-// Gives the compiler-assigned register for a shader storage block.
-// The method writes the value to the output variable "indexOut".
-// Returns true if it found a valid shader storage block, false otherwise.
-// Parameters:
-// handle: Specifies the compiler
-// shaderStorageBlockName: Specifies the shader storage block
-// indexOut: output variable that stores the assigned register
-bool GetShaderStorageBlockRegister(const ShHandle handle,
-                                   const std::string &shaderStorageBlockName,
-                                   unsigned int *indexOut);
-
 // Gives the compiler-assigned register for a uniform block.
 // The method writes the value to the output variable "indexOut".
 // Returns true if it found a valid uniform block, false otherwise.
@@ -962,13 +951,13 @@ uint32_t GetAdvancedBlendEquations(const ShHandle handle);
 //
 inline bool IsWebGLBasedSpec(ShShaderSpec spec)
 {
-    return (spec == SH_WEBGL_SPEC || spec == SH_WEBGL2_SPEC || spec == SH_WEBGL3_SPEC);
+    return (spec == SH_WEBGL_SPEC || spec == SH_WEBGL2_SPEC);
 }
 
 // Can't prefix with just _ because then we might introduce a double underscore, which is not safe
 // in GLSL (ESSL 3.00.6 section 3.8: All identifiers containing a double underscore are reserved for
 // use by the underlying implementation). u is short for user-defined.
-extern const char kUserDefinedNamePrefix[];
+extern const char kUserDefinedNamePrefix;
 
 enum class MetadataFlags
 {
@@ -1003,19 +992,17 @@ namespace vk
 // Specialization constant ids
 enum class SpecializationConstantId : uint32_t
 {
-    SurfaceRotation = 0,
-    Dither          = 1,
+    Dither = 0,
 
-    InvalidEnum = 2,
+    InvalidEnum = 1,
     EnumCount   = InvalidEnum,
 };
 
 enum class SpecConstUsage : uint32_t
 {
-    Rotation = 0,
-    Dither   = 1,
+    Dither = 0,
 
-    InvalidEnum = 2,
+    InvalidEnum = 1,
     EnumCount   = InvalidEnum,
 };
 
@@ -1139,6 +1126,15 @@ enum ReservedIds
     kIdInputAttachment7 = kIdInputAttachment0 + 7,
     kIdDepthInputAttachment,
     kIdStencilInputAttachment,
+
+    // 16-bit storage extension
+    kIdFloat16,
+    kIdFloat16Vec2,
+    kIdFloat16Vec3,
+    kIdFloat16Vec4,
+    kIdFloat16Mat2,
+    kIdFloat16Mat3,
+    kIdFloat16Mat4,
 
     kIdFirstUnreserved,
 };

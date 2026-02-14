@@ -115,7 +115,7 @@ def dag_traverse(root_keys: Sequence[str], pre_recurse_func: Callable[[str], lis
 print('Importing graph', file=sys.stderr)
 
 try:
-    p = run_checked('gn', 'desc', '--format=json', str(OUT_DIR), '*', stdout=subprocess.PIPE,
+    p = run_checked(sys.executable, 'third_party/depot_tools/gn.py', 'desc', '--format=json', str(OUT_DIR), '*', stdout=subprocess.PIPE,
                 env=GN_ENV, shell=(True if sys.platform == 'win32' else False))
 except subprocess.CalledProcessError:
     sys.stderr.buffer.write(b'"gn desc" failed. Is depot_tools in your PATH?\n')
@@ -134,7 +134,8 @@ LIBRARY_TYPES = ('shared_library', 'static_library')
 def flattened_target(target_name: str, descs: dict, stop_at_lib: bool =True) -> dict:
     flattened = dict(descs[target_name])
 
-    EXPECTED_TYPES = LIBRARY_TYPES + ('source_set', 'group', 'action')
+    EXPECTED_TYPES = LIBRARY_TYPES + ('source_set', 'group', 'action', 'action_foreach',
+                                      'executable')
 
     def pre(k):
         dep = descs[k]
@@ -187,6 +188,9 @@ IGNORED_INCLUDES = {
     b'compiler/translator/glsl/TranslatorESSL.h',
     b'compiler/translator/glsl/TranslatorGLSL.h',
     b'compiler/translator/hlsl/TranslatorHLSL.h',
+    b'compiler/translator/ir/src/builder.rs.h',
+    b'compiler/translator/ir/src/compile.rs.h',
+    b'compiler/translator/ir/src/output/legacy.rs.h',
     b'compiler/translator/msl/TranslatorMSL.h',
     b'compiler/translator/null/TranslatorNULL.h',
     b'compiler/translator/spirv/TranslatorSPIRV.h',
@@ -212,11 +216,11 @@ IGNORED_INCLUDES = {
     b'libANGLE/renderer/vulkan/android/DisplayVkAndroid.h',
     b'libANGLE/renderer/vulkan/DisplayVk_api.h',
     b'libANGLE/renderer/vulkan/fuchsia/DisplayVkFuchsia.h',
-    b'libANGLE/renderer/vulkan/ggp/DisplayVkGGP.h',
     b'libANGLE/renderer/vulkan/mac/DisplayVkMac.h',
     b'libANGLE/renderer/vulkan/win32/DisplayVkWin32.h',
     b'libANGLE/renderer/vulkan/xcb/DisplayVkXcb.h',
     b'libANGLE/renderer/vulkan/wayland/DisplayVkWayland.h',
+    b'libANGLE/renderer/wgpu/DisplayWgpu_api.h',
     b'loader_cmake_config.h',
     b'loader_linux.h',
     b'loader_windows.h',
@@ -233,6 +237,7 @@ IGNORED_INCLUDES = {
     b'vulkan_ios.h',
     b'vulkan_macos.h',
     b'vulkan_metal.h',
+    b'vulkan_ohos.h',
     b'vulkan_sci.h',
     b'vulkan_vi.h',
     b'vulkan_wayland.h',
@@ -244,11 +249,11 @@ IGNORED_INCLUDES = {
     # comments. Since the script doesn't skip comments they are
     # erroneously marked as valid includes
     b'rapidjson/...',
-    # Validation layers support building with robin hood hashing, but we are not enabling that
-    # See http://anglebug.com/42264327
-    b'robin_hood.h',
+    # Conditionally included in http://github.com/KhronosGroup/Vulkan-ValidationLayers/pull/9790
+    b'parallel_hashmap/phmap.h',
     # Validation layers optionally use mimalloc
     b'mimalloc-new-delete.h',
+    b'mimalloc-stats.h',
     # From the Vulkan-Loader
     b'winres.h',
     # From a comment in vulkan-validation-layers/src/layers/vk_mem_alloc.h

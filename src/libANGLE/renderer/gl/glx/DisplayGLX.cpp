@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 // DisplayGLX.cpp: GLX implementation of egl::Display
 
 #include <algorithm>
@@ -300,9 +304,10 @@ egl::Error DisplayGLX::initialize(egl::Display *display)
             return egl::Error(EGL_NOT_INITIALIZED, "Context lost for unknown reason.");
         }
     }
-    // TODO(cwallez, angleproject:1303) Disable the OpenGL ES backend on Linux NVIDIA and Intel as
-    // it has problems on our automated testing. An OpenGL ES backend might not trigger this test if
-    // there is no Desktop OpenGL support, but that's not the case in our automated testing.
+    // TODO(cwallez, http://anglebug.com/42260314) Disable the OpenGL ES backend on Linux NVIDIA and
+    // Intel as it has problems on our automated testing. An OpenGL ES backend might not trigger
+    // this test if there is no Desktop OpenGL support, but that's not the case in our automated
+    // testing.
     VendorID vendor = GetVendorID(functionsGL.get());
     bool isOpenGLES =
         eglAttributes.get(EGL_PLATFORM_ANGLE_TYPE_ANGLE, EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE) ==
@@ -478,13 +483,14 @@ egl::Error DisplayGLX::initializeContext(glx::FBConfig config,
     }
 
     // Create a context of the requested version, if any.
-    gl::Version requestedVersion(static_cast<EGLint>(eglAttributes.get(
-                                     EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE, EGL_DONT_CARE)),
-                                 static_cast<EGLint>(eglAttributes.get(
-                                     EGL_PLATFORM_ANGLE_MAX_VERSION_MINOR_ANGLE, EGL_DONT_CARE)));
-    if (static_cast<EGLint>(requestedVersion.major) != EGL_DONT_CARE &&
-        static_cast<EGLint>(requestedVersion.minor) != EGL_DONT_CARE)
+    const EGLint clientMajorVersion = static_cast<EGLint>(
+        eglAttributes.get(EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE, EGL_DONT_CARE));
+    const EGLint clientMinorVersion = static_cast<EGLint>(
+        eglAttributes.get(EGL_PLATFORM_ANGLE_MAX_VERSION_MINOR_ANGLE, EGL_DONT_CARE));
+    if (clientMajorVersion != EGL_DONT_CARE && clientMinorVersion != EGL_DONT_CARE)
     {
+        const gl::Version requestedVersion(static_cast<uint8_t>(clientMajorVersion),
+                                           static_cast<uint8_t>(clientMinorVersion));
         if (!(profileMask & GLX_CONTEXT_ES2_PROFILE_BIT_EXT) &&
             requestedVersion >= gl::Version(3, 2))
         {
@@ -914,10 +920,10 @@ egl::Error DisplayGLX::createContextAttribs(glx::FBConfig,
     if (version.valid())
     {
         attribs.push_back(GLX_CONTEXT_MAJOR_VERSION_ARB);
-        attribs.push_back(version.value().major);
+        attribs.push_back(version.value().getMajor());
 
         attribs.push_back(GLX_CONTEXT_MINOR_VERSION_ARB);
-        attribs.push_back(version.value().minor);
+        attribs.push_back(version.value().getMinor());
     }
 
     if (profileMask != 0 && mHasARBCreateContextProfile)

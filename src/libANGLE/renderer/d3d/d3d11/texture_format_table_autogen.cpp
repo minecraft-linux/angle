@@ -121,43 +121,6 @@ const Format &Format::Get(GLenum internalFormat, const Renderer11DeviceCaps &dev
                                          nullptr);
             return info;
         }
-        case GL_BGR565_ANGLEX:
-        {
-            if (SupportsFormat(DXGI_FORMAT_B5G6R5_UNORM, deviceCaps))
-            {
-                static constexpr Format info(GL_BGR565_ANGLEX,
-                                             angle::FormatID::B5G6R5_UNORM,
-                                             DXGI_FORMAT_B5G6R5_UNORM,
-                                             DXGI_FORMAT_B5G6R5_UNORM,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             DXGI_FORMAT_B5G6R5_UNORM,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             DXGI_FORMAT_B5G6R5_UNORM,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             GL_RGBA8,
-                                             nullptr);
-                return info;
-            }
-            else
-            {
-                static constexpr Format info(GL_BGR565_ANGLEX,
-                                             angle::FormatID::R8G8B8A8_UNORM,
-                                             DXGI_FORMAT_R8G8B8A8_UNORM,
-                                             DXGI_FORMAT_R8G8B8A8_UNORM,
-                                             DXGI_FORMAT_R8G8B8A8_UNORM,
-                                             DXGI_FORMAT_R8G8B8A8_UNORM,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             DXGI_FORMAT_R8G8B8A8_UNORM,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             DXGI_FORMAT_UNKNOWN,
-                                             DXGI_FORMAT_R8G8B8A8_TYPELESS,
-                                             GL_RGBA8,
-                                             nullptr);
-                return info;
-            }
-        }
         case GL_BGR5_A1_ANGLEX:
         {
             static constexpr Format info(GL_BGR5_A1_ANGLEX,
@@ -222,7 +185,24 @@ const Format &Format::Get(GLenum internalFormat, const Renderer11DeviceCaps &dev
                                          DXGI_FORMAT_UNKNOWN,
                                          DXGI_FORMAT_B8G8R8A8_UNORM,
                                          DXGI_FORMAT_B8G8R8A8_TYPELESS,
-                                         GL_BGRA8_SRGB_ANGLEX,
+                                         GL_RGBA8,
+                                         nullptr);
+            return info;
+        }
+        case GL_BGRA_EXT:
+        {
+            static constexpr Format info(GL_BGRA_EXT,
+                                         angle::FormatID::B8G8R8A8_UNORM,
+                                         DXGI_FORMAT_B8G8R8A8_UNORM,
+                                         DXGI_FORMAT_B8G8R8A8_UNORM,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_B8G8R8A8_UNORM,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_B8G8R8A8_UNORM,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_B8G8R8A8_TYPELESS,
+                                         GL_BGRA8_EXT,
                                          nullptr);
             return info;
         }
@@ -2338,6 +2318,23 @@ const Format &Format::Get(GLenum internalFormat, const Renderer11DeviceCaps &dev
                                          nullptr);
             return info;
         }
+        case GL_R10X6G10X6B10X6A10X6_UNORM_ANGLEX:
+        {
+            static constexpr Format info(GL_R10X6G10X6B10X6A10X6_UNORM_ANGLEX,
+                                         angle::FormatID::R10X6G10X6B10X6A10X6_UNORM,
+                                         DXGI_FORMAT_R16G16B16A16_UNORM,
+                                         DXGI_FORMAT_R16G16B16A16_UNORM,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_R16G16B16A16_UNORM,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_R16G16B16A16_UNORM,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_UNKNOWN,
+                                         DXGI_FORMAT_R16G16B16A16_TYPELESS,
+                                         GL_R10X6G10X6B10X6A10X6_UNORM_ANGLEX,
+                                         nullptr);
+            return info;
+        }
         case GL_R11F_G11F_B10F:
         {
             static constexpr Format info(GL_R11F_G11F_B10F,
@@ -2972,7 +2969,7 @@ const Format &Format::Get(GLenum internalFormat, const Renderer11DeviceCaps &dev
             if (SupportsFormat(DXGI_FORMAT_B5G6R5_UNORM, deviceCaps))
             {
                 static constexpr Format info(GL_RGB565,
-                                             angle::FormatID::B5G6R5_UNORM,
+                                             angle::FormatID::R5G6B5_UNORM,
                                              DXGI_FORMAT_B5G6R5_UNORM,
                                              DXGI_FORMAT_B5G6R5_UNORM,
                                              DXGI_FORMAT_UNKNOWN,

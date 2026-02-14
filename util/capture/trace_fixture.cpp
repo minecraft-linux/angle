@@ -7,10 +7,15 @@
 //   Common code for the ANGLE trace replays.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "trace_fixture.h"
 
 #include "angle_trace_gl.h"
 
+#include <filesystem>
 #include <string>
 
 namespace
@@ -32,8 +37,9 @@ void UpdateResourceMapPerContext(GLuint **resourceArray,
     resourceArray[contextId][id] = returnedID;
 }
 
-uint32_t gMaxContexts                  = 0;
+uint32_t gMaxContexts                  = 1;
 angle::TraceCallbacks *gTraceCallbacks = nullptr;
+std::vector<std::string> *gRequestedExtensions = nullptr;
 
 EGLClientBuffer GetClientBuffer(EGLenum target, uintptr_t key)
 {
@@ -68,10 +74,37 @@ ValidateSerializedStateCallback gValidateSerializedStateCallback;
 std::unordered_map<GLuint, std::vector<GLint>> gInternalUniformLocationsMap;
 
 constexpr size_t kMaxClientArrays = 16;
+
+std::vector<std::string> *LoadRequestedExtensions()
+{
+    // Read in requested extensions if the file exists
+    constexpr const char *REQUESTED_EXTENSIONS_FILENAME = "angle_trace_requested_extensions";
+
+    std::filesystem::path tempDir     = std::filesystem::temp_directory_path();
+    std::filesystem::path extFilePath = tempDir / REQUESTED_EXTENSIONS_FILENAME;
+    std::ifstream extFile(extFilePath);
+    std::vector<std::string> *requestedExtensions = nullptr;
+
+    if (extFile.is_open())
+    {
+        requestedExtensions = new std::vector<std::string>();
+        std::string ext;
+        while (std::getline(extFile, ext))
+        {
+            requestedExtensions->push_back(ext);
+        }
+        extFile.close();
+        // Delete the file to prevent unexpected results in future runs
+        std::filesystem::remove(extFilePath);
+    }
+    return requestedExtensions;
+}
 }  // namespace
 
 GLint **gUniformLocations;
 GLuint gCurrentProgram = 0;
+GLuint gCurrentContext = 0;
+GLuint *gCurrentProgramPerContext;
 
 // TODO(jmadill): Hide from the traces. http://anglebug.com/42266223
 BlockIndexesMap gUniformBlockIndexes;
@@ -112,9 +145,22 @@ void UniformBlockBinding(GLuint program, GLuint uniformblockIndex, GLuint bindin
 void UpdateCurrentProgram(GLuint program)
 {
     gCurrentProgram = program;
+    // gCurrentContext will be zero for legacy traces
+    gCurrentProgramPerContext[0] = program;
+}
+
+void UpdateCurrentContext(GLuint context)
+{
+    gCurrentContext = context;
+}
+
+void UpdateCurrentProgramPerContext(GLuint program)
+{
+    gCurrentProgramPerContext[gCurrentContext] = program;
 }
 
 uint8_t *gBinaryData;
+angle::FrameCaptureBinaryData *gFrameCaptureBinaryData;
 uint8_t *gReadBuffer;
 uint8_t *gClientArrays[kMaxClientArrays];
 GLuint *gResourceIDBuffer;
@@ -166,6 +212,39 @@ GLuint *AllocateZeroedUints(size_t count)
     return AllocateZeroedValues<GLuint>(count);
 }
 
+void InitializeReplay5(const char *binaryDataFileName,
+                       size_t maxClientArraySize,
+                       size_t readBufferSize,
+                       size_t resourceIDBufferSize,
+                       GLuint contextId,
+                       uint32_t maxBuffer,
+                       uint32_t maxContext,
+                       uint32_t maxFenceNV,
+                       uint32_t maxFramebuffer,
+                       uint32_t maxImage,
+                       uint32_t maxMemoryObject,
+                       uint32_t maxProgramPipeline,
+                       uint32_t maxQuery,
+                       uint32_t maxRenderbuffer,
+                       uint32_t maxSampler,
+                       uint32_t maxSemaphore,
+                       uint32_t maxShaderProgram,
+                       uint32_t maxSurface,
+                       uint32_t maxSync,
+                       uint32_t maxTexture,
+                       uint32_t maxTransformFeedback,
+                       uint32_t maxVertexArray,
+                       GLuint maxEGLSyncID)
+{
+    gFrameCaptureBinaryData = gTraceCallbacks->ConfigureBinaryDataLoader(binaryDataFileName);
+
+    InitializeReplay4(binaryDataFileName, maxClientArraySize, readBufferSize, resourceIDBufferSize,
+                      contextId, maxBuffer, maxContext, maxFenceNV, maxFramebuffer, maxImage,
+                      maxMemoryObject, maxProgramPipeline, maxQuery, maxRenderbuffer, maxSampler,
+                      maxSemaphore, maxShaderProgram, maxSurface, maxSync, maxTexture,
+                      maxTransformFeedback, maxVertexArray, maxEGLSyncID);
+}
+
 void InitializeReplay4(const char *binaryDataFileName,
                        size_t maxClientArraySize,
                        size_t readBufferSize,
@@ -197,14 +276,6 @@ void InitializeReplay4(const char *binaryDataFileName,
                       maxTransformFeedback, maxVertexArray);
     gEGLSyncMap = AllocateZeroedValues<EGLSync>(maxEGLSyncID);
     gEGLDisplay = eglGetCurrentDisplay();
-
-    gMaxContexts              = maxContext + 1;
-    gFramebufferMapPerContext = new GLuint *[gMaxContexts];
-    memset(gFramebufferMapPerContext, 0, sizeof(GLuint *) * (gMaxContexts));
-    for (uint8_t i = 0; i < gMaxContexts; i++)
-    {
-        gFramebufferMapPerContext[i] = AllocateZeroedValues<GLuint>(maxFramebuffer);
-    }
 }
 
 void InitializeReplay3(const char *binaryDataFileName,
@@ -261,6 +332,7 @@ void InitializeReplay2(const char *binaryDataFileName,
                        uint32_t maxTransformFeedback,
                        uint32_t maxVertexArray)
 {
+    gMaxContexts = maxContext + 1;
     InitializeReplay(binaryDataFileName, maxClientArraySize, readBufferSize, maxBuffer, maxFenceNV,
                      maxFramebuffer, maxMemoryObject, maxProgramPipeline, maxQuery, maxRenderbuffer,
                      maxSampler, maxSemaphore, maxShaderProgram, maxTexture, maxTransformFeedback,
@@ -293,7 +365,10 @@ void InitializeReplay(const char *binaryDataFileName,
                       uint32_t maxTransformFeedback,
                       uint32_t maxVertexArray)
 {
-    gBinaryData = gTraceCallbacks->LoadBinaryData(binaryDataFileName);
+    if (!gFrameCaptureBinaryData)
+    {
+        gBinaryData = gTraceCallbacks->LoadBinaryData(binaryDataFileName);
+    }
 
     for (uint8_t *&clientArray : gClientArrays)
     {
@@ -320,6 +395,17 @@ void InitializeReplay(const char *binaryDataFileName,
     memset(gUniformLocations, 0, sizeof(GLint *) * (maxShaderProgram + 1));
 
     gContextMap[0] = EGL_NO_CONTEXT;
+
+    gCurrentProgramPerContext = new GLuint[gMaxContexts];
+    gFramebufferMapPerContext = new GLuint *[gMaxContexts];
+    memset(gFramebufferMapPerContext, 0, sizeof(GLuint *) * (gMaxContexts));
+    for (uint8_t i = 0; i < gMaxContexts; i++)
+    {
+        gFramebufferMapPerContext[i] = AllocateZeroedValues<GLuint>(maxFramebuffer);
+    }
+
+    // Pull in requested extension list from file created by ANGLEPerfTest
+    gRequestedExtensions = LoadRequestedExtensions();
 }
 
 void FinishReplay()
@@ -349,11 +435,21 @@ void FinishReplay()
     delete[] gTransformFeedbackMap;
     delete[] gVertexArrayMap;
 
+    delete gRequestedExtensions;
+
     for (uint8_t i = 0; i < gMaxContexts; i++)
     {
         delete[] gFramebufferMapPerContext[i];
     }
     delete[] gFramebufferMapPerContext;
+    delete[] gCurrentProgramPerContext;
+
+    if (gFrameCaptureBinaryData)
+    {
+        gFrameCaptureBinaryData->closeBinaryDataLoader();
+        delete gFrameCaptureBinaryData;
+        gFrameCaptureBinaryData = nullptr;
+    }
 }
 
 void SetValidateSerializedStateCallback(ValidateSerializedStateCallback callback)
@@ -698,16 +794,49 @@ void CreateNativeClientBufferANDROID(const EGLint *attrib_list, uintptr_t client
     gClientBufferMap[clientBuffer] = eglCreateNativeClientBufferANDROID(attrib_list);
 }
 
+// The test harness can set specific extensions, but only for the main context
+// so enable the same set of extensions for each side-context.
+void EnableSideContextExtensions(GLuint contextID)
+{
+    if (gRequestedExtensions)
+    {
+        // Change to newly-created side-context
+        eglMakeCurrent(NULL, NULL, NULL, gContextMap2[contextID]);
+        for (auto &ext : *gRequestedExtensions)
+        {
+            glRequestExtensionANGLE(ext.c_str());
+        }
+        // Switch back to main context
+        eglMakeCurrent(NULL, NULL, NULL, gContextMap2[gShareContextId]);
+    }
+}
+
 void CreateContext(GLuint contextID)
 {
     EGLContext shareContext = gContextMap2[gShareContextId];
     EGLContext context      = eglCreateContext(nullptr, nullptr, shareContext, nullptr);
     gContextMap2[contextID] = context;
+
+    // Extensions set using --request-extensions must be propagated to side-contexts
+    if (gRequestedExtensions)
+    {
+        EnableSideContextExtensions(contextID);
+    }
 }
 
 void SetCurrentContextID(GLuint id)
 {
     gContextMap2[id] = eglGetCurrentContext();
+}
+
+const uint8_t *GetBinaryData(const size_t offset)
+{
+    return gFrameCaptureBinaryData->getData(offset);
+}
+
+void InitializeBinaryDataLoader()
+{
+    gFrameCaptureBinaryData->initializeBinaryDataLoader();
 }
 
 ANGLE_REPLAY_EXPORT PFNEGLCREATEIMAGEPROC r_eglCreateImage;

@@ -268,7 +268,7 @@ angle::Result SyncHelper::getStatus(ErrorContext *context, ContextVk *contextVk,
         // be blocked by command buffer recording if another thread calls
         // CommandPoolAccess::flushRenderPassCommands(), which is against EGL spec where
         // eglClientWaitSync() should return immediately with timeout == 0.
-        if (renderer->isAsyncCommandBufferResetAndGarbageCleanupEnabled())
+        if (renderer->getFeatures().asyncGarbageCleanup.enabled)
         {
             ANGLE_TRY(renderer->checkCompletedCommandsAndCleanup(context));
         }
@@ -356,6 +356,10 @@ VkResult ExternalFence::getStatus(VkDevice device) const
 {
     if (mFenceFdStatus == VK_SUCCESS)
     {
+        if (mFenceFd == kInvalidFenceFd)
+        {
+            return VK_SUCCESS;
+        }
         return SyncWaitFd(mFenceFd, 0, VK_NOT_READY);
     }
     return mFence.getStatus(device);
@@ -365,6 +369,10 @@ VkResult ExternalFence::wait(VkDevice device, uint64_t timeout) const
 {
     if (mFenceFdStatus == VK_SUCCESS)
     {
+        if (mFenceFd == kInvalidFenceFd)
+        {
+            return VK_SUCCESS;
+        }
         return SyncWaitFd(mFenceFd, timeout);
     }
     return mFence.wait(device, timeout);
@@ -433,7 +441,7 @@ angle::Result SyncHelperNativeFence::initializeWithFd(ContextVk *contextVk, int 
     */
     // Flush current pending set of commands providing the fence...
     ANGLE_TRY(contextVk->flushAndSubmitCommands(nullptr, &mExternalFence,
-                                                RenderPassClosureReason::SyncObjectWithFdInit));
+                                                QueueSubmitReason::SyncObjectWithFdInit));
 
     ANGLE_VK_TRY(contextVk, mExternalFence->getFenceFdStatus());
 
@@ -465,7 +473,7 @@ angle::Result SyncHelperNativeFence::prepareForClientWait(ErrorContext *context,
     if (flushCommands && contextVk)
     {
         ANGLE_TRY(contextVk->flushAndSubmitCommands(nullptr, nullptr,
-                                                    RenderPassClosureReason::SyncObjectClientWait));
+                                                    QueueSubmitReason::SyncObjectClientWait));
     }
 
     *resultOut = VK_INCOMPLETE;
@@ -521,7 +529,7 @@ angle::Result SyncHelperNativeFence::serverWait(ContextVk *contextVk)
     DeviceScoped<Semaphore> waitSemaphore(device);
     // Wait semaphore for next vkQueueSubmit().
     // Create a Semaphore with imported fenceFd.
-    ANGLE_VK_TRY(contextVk, waitSemaphore.get().init(device));
+    ANGLE_VK_TRY(contextVk, waitSemaphore.get().init(device, VK_SEMAPHORE_TYPE_BINARY));
 
     VkImportSemaphoreFdInfoKHR importFdInfo = {};
     importFdInfo.sType                      = VK_STRUCTURE_TYPE_IMPORT_SEMAPHORE_FD_INFO_KHR;

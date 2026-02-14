@@ -125,7 +125,11 @@ class FramebufferVk : public FramebufferImpl
                                      vk::RenderPassCommandBuffer **commandBufferOut,
                                      bool *renderPassDescChangedOut);
 
-    GLint getSamples() const;
+    GLint getSamples() const
+    {
+        ASSERT(mRasterizationSamples > 0);
+        return mRasterizationSamples;
+    }
 
     const vk::RenderPassDesc &getRenderPassDesc() const { return mRenderPassDesc; }
 
@@ -136,6 +140,7 @@ class FramebufferVk : public FramebufferImpl
     bool hasDeferredStencilClear() const { return mDeferredClears.testStencil(); }
     angle::Result flushDepthStencilDeferredClear(ContextVk *contextVk,
                                                  VkImageAspectFlagBits aspect);
+    void restageDeferredClearsAfterNoopDraw(ContextVk *contextVk);
 
     void switchToColorFramebufferFetchMode(ContextVk *contextVk, bool hasColorFramebufferFetch);
 
@@ -182,23 +187,28 @@ class FramebufferVk : public FramebufferImpl
         RenderTargetImage renderTargetImage;
     };
 
+    struct CachedAttachmentsInfo
+    {
+        void clear()
+        {
+            unpackedAttachments.clear();
+            packedRenderTargetsInfo.clear();
+        }
+        vk::FramebufferAttachmentsVector<VkImageView> unpackedAttachments;
+        vk::FramebufferAttachmentsVector<RenderTargetInfo> packedRenderTargetsInfo;
+    };
+
     // Returns the attachments to be used to create a framebuffer.  The views returned in
     // |unpackedAttachments| are not necessarily packed, but the render targets in
     // |packedRenderTargetsInfoOut| are.  In particular, the resolve attachment views need to stay
     // sparse to be placed in |RenderPassFramebuffer|, but the calling function will have to pack
     // them to match the render buffers before creating a framebuffer.
-    angle::Result getAttachmentsAndRenderTargets(
-        vk::ErrorContext *context,
-        vk::FramebufferAttachmentsVector<VkImageView> *unpackedAttachments,
-        vk::FramebufferAttachmentsVector<RenderTargetInfo> *packedRenderTargetsInfoOut);
+    angle::Result updateAttachmentsAndRenderTargets(ContextVk *contextVk);
 
-    angle::Result createNewFramebuffer(
-        ContextVk *contextVk,
-        uint32_t framebufferWidth,
-        const uint32_t framebufferHeight,
-        const uint32_t framebufferLayers,
-        const vk::FramebufferAttachmentsVector<VkImageView> &unpackedAttachments,
-        const vk::FramebufferAttachmentsVector<RenderTargetInfo> &renderTargetsInfo);
+    angle::Result createNewFramebuffer(ContextVk *contextVk,
+                                       uint32_t framebufferWidth,
+                                       const uint32_t framebufferHeight,
+                                       const uint32_t framebufferLayers);
 
     // The 'in' rectangles must be clipped to the scissor and FBO. The clipping is done in 'blit'.
     angle::Result blitWithCommand(ContextVk *contextVk,
@@ -310,6 +320,7 @@ class FramebufferVk : public FramebufferImpl
     angle::Result updateFoveationState(ContextVk *contextVk,
                                        const gl::FoveationState &newFoveationState,
                                        const gl::Extents &foveatedAttachmentSize);
+    GLint getSamplesImpl() const;
 
     void insertCache(ContextVk *contextVk,
                      const vk::FramebufferDesc &desc,
@@ -355,6 +366,12 @@ class FramebufferVk : public FramebufferImpl
 
     // Serial of the render pass this framebuffer has opened, if any.
     QueueSerial mLastRenderPassQueueSerial;
+
+    // Cached value of rasterization samples
+    GLint mRasterizationSamples;
+
+    // Cached values of unpacked attachments and render target info for the framebuffer.
+    CachedAttachmentsInfo mCachedAttachmentsInfo;
 };
 }  // namespace rx
 

@@ -7,6 +7,10 @@
 // PBufferSurfaceCGL.cpp: an implementation of PBuffers created from IOSurfaces using
 //                        EGL_ANGLE_iosurface_client_buffer
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/gl/cgl/IOSurfaceSurfaceCGL.h"
 
 #include <IOSurface/IOSurface.h>
@@ -139,7 +143,7 @@ egl::Error IOSurfaceSurfaceCGL::unMakeCurrent(const gl::Context *context)
     return egl::NoError();
 }
 
-egl::Error IOSurfaceSurfaceCGL::swap(const gl::Context *context)
+egl::Error IOSurfaceSurfaceCGL::swap(const gl::Context *context, SurfaceSwapFeedback *feedback)
 {
     return egl::NoError();
 }
@@ -202,14 +206,9 @@ void IOSurfaceSurfaceCGL::setSwapInterval(const egl::Display *display, EGLint in
     UNREACHABLE();
 }
 
-EGLint IOSurfaceSurfaceCGL::getWidth() const
+gl::Extents IOSurfaceSurfaceCGL::getSize() const
 {
-    return mWidth;
-}
-
-EGLint IOSurfaceSurfaceCGL::getHeight() const
-{
-    return mHeight;
+    return gl::Extents(mWidth, mHeight, 1);
 }
 
 EGLint IOSurfaceSurfaceCGL::isPostSubBufferSupported() const

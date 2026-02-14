@@ -10,6 +10,10 @@
 #ifndef ANGLE_TEST_INSTANTIATE_H_
 #define ANGLE_TEST_INSTANTIATE_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <gtest/gtest.h>
 
 #include "common/platform_helpers.h"
@@ -43,6 +47,7 @@ bool IsAndroid14OrNewer();
 // GPU vendors.
 bool IsIntel();
 bool IsAMD();
+bool IsSamsung();
 bool IsAppleGPU();
 bool IsARM();
 bool IsNVIDIA();
@@ -119,29 +124,13 @@ struct CombinedPrintToStringParamName
     INSTANTIATE_TEST_SUITE_P(, testName, testing::ValuesIn(::angle::FilterTestParams(valuesin)), \
                              testing::PrintToStringParamName())
 
-#if !defined(ANGLE_TEST_ENABLE_SYSTEM_EGL)
-#    define ANGLE_TEST_PLATFORMS_ES1_SYSTEM_EGL
-#    define ANGLE_TEST_PLATFORMS_ES2_SYSTEM_EGL
-#    define ANGLE_TEST_PLATFORMS_ES3_SYSTEM_EGL
-#    define ANGLE_TEST_PLATFORMS_ES31_SYSTEM_EGL
-#    define ANGLE_TEST_PLATFORMS_ES32_SYSTEM_EGL
-#else
-#    define ANGLE_TEST_PLATFORMS_ES1_SYSTEM_EGL ES1_EGL(),
-#    define ANGLE_TEST_PLATFORMS_ES2_SYSTEM_EGL ES2_EGL(),
-#    define ANGLE_TEST_PLATFORMS_ES3_SYSTEM_EGL ES3_EGL(),
-#    define ANGLE_TEST_PLATFORMS_ES31_SYSTEM_EGL ES31_EGL(),
-#    define ANGLE_TEST_PLATFORMS_ES32_SYSTEM_EGL ES32_EGL(),
-#endif
-
 #define ANGLE_ALL_TEST_PLATFORMS_ES1                                      \
-    ANGLE_TEST_PLATFORMS_ES1_SYSTEM_EGL                                   \
     ES1_D3D11(), ES1_METAL(), ES1_OPENGL(), ES1_OPENGLES(), ES1_VULKAN(), \
         ES1_VULKAN_SWIFTSHADER(), ES1_VULKAN().enable(Feature::EnableParallelCompileAndLink)
 
 #define ANGLE_ALL_TEST_PLATFORMS_ES2                                                               \
-    ANGLE_TEST_PLATFORMS_ES2_SYSTEM_EGL                                                            \
     ES2_D3D9(), ES2_D3D11(), ES2_OPENGL(), ES2_OPENGLES(), ES2_VULKAN(), ES2_VULKAN_SWIFTSHADER(), \
-        ES2_METAL(),                                                                               \
+        ES2_METAL(), ES2_WEBGPU(),                                                                 \
         ES2_VULKAN()                                                                               \
             .enable(Feature::EnableParallelCompileAndLink)                                         \
             .enable(Feature::VaryingsRequireMatchingPrecisionInSpirv),                             \
@@ -150,7 +139,6 @@ struct CombinedPrintToStringParamName
             .disable(Feature::SupportsGraphicsPipelineLibrary)
 
 #define ANGLE_ALL_TEST_PLATFORMS_ES3                                                   \
-    ANGLE_TEST_PLATFORMS_ES3_SYSTEM_EGL                                                \
     ES3_D3D11(), ES3_OPENGL(), ES3_OPENGLES(), ES3_VULKAN(), ES3_VULKAN_SWIFTSHADER(), \
         ES3_METAL(),                                                                   \
         ES3_VULKAN()                                                                   \
@@ -159,21 +147,20 @@ struct CombinedPrintToStringParamName
         ES3_VULKAN_SWIFTSHADER()                                                       \
             .enable(Feature::EnableParallelCompileAndLink)                             \
             .disable(Feature::SupportsGraphicsPipelineLibrary)                         \
-            .enable(Feature::VaryingsRequireMatchingPrecisionInSpirv)
+            .enable(Feature::VaryingsRequireMatchingPrecisionInSpirv)                  \
+            .enable(Feature::SimulateTileMemoryForTesting)
 
-#define ANGLE_ALL_TEST_PLATFORMS_ES31                                                       \
-    ANGLE_TEST_PLATFORMS_ES31_SYSTEM_EGL                                                    \
-    ES31_D3D11(), ES31_OPENGL(), ES31_OPENGLES(), ES31_VULKAN(), ES31_VULKAN_SWIFTSHADER(), \
-        ES31_VULKAN()                                                                       \
-            .enable(Feature::EnableParallelCompileAndLink)                                  \
-            .enable(Feature::VaryingsRequireMatchingPrecisionInSpirv),                      \
-        ES31_VULKAN_SWIFTSHADER()                                                           \
-            .enable(Feature::EnableParallelCompileAndLink)                                  \
-            .disable(Feature::SupportsGraphicsPipelineLibrary)                              \
+#define ANGLE_ALL_TEST_PLATFORMS_ES31                                         \
+    ES31_OPENGL(), ES31_OPENGLES(), ES31_VULKAN(), ES31_VULKAN_SWIFTSHADER(), \
+        ES31_VULKAN()                                                         \
+            .enable(Feature::EnableParallelCompileAndLink)                    \
+            .enable(Feature::VaryingsRequireMatchingPrecisionInSpirv),        \
+        ES31_VULKAN_SWIFTSHADER()                                             \
+            .enable(Feature::EnableParallelCompileAndLink)                    \
+            .disable(Feature::SupportsGraphicsPipelineLibrary)                \
             .enable(Feature::VaryingsRequireMatchingPrecisionInSpirv)
 
 #define ANGLE_ALL_TEST_PLATFORMS_ES32                                 \
-    ANGLE_TEST_PLATFORMS_ES32_SYSTEM_EGL                              \
     ES32_VULKAN(), ES32_VULKAN()                                      \
                        .enable(Feature::EnableParallelCompileAndLink) \
                        .enable(Feature::VaryingsRequireMatchingPrecisionInSpirv)
@@ -287,6 +274,13 @@ struct CombinedPrintToStringParamName
 #define ANGLE_INSTANTIATE_TEST_ES3_AND_ES31_AND(testName, ...)                                  \
     const PlatformParameters testName##params[] = {ANGLE_ALL_TEST_PLATFORMS_ES3,                \
                                                    ANGLE_ALL_TEST_PLATFORMS_ES31, __VA_ARGS__}; \
+    INSTANTIATE_TEST_SUITE_P(, testName, ANGLE_INSTANTIATE_TEST_PLATFORMS(testName),            \
+                             testing::PrintToStringParamName())
+
+#define ANGLE_INSTANTIATE_TEST_ES3_AND_ES31_AND_ES32(testName, ...)                             \
+    const PlatformParameters testName##params[] = {ANGLE_ALL_TEST_PLATFORMS_ES3,                \
+                                                   ANGLE_ALL_TEST_PLATFORMS_ES31,               \
+                                                   ANGLE_ALL_TEST_PLATFORMS_ES32, __VA_ARGS__}; \
     INSTANTIATE_TEST_SUITE_P(, testName, ANGLE_INSTANTIATE_TEST_PLATFORMS(testName),            \
                              testing::PrintToStringParamName())
 

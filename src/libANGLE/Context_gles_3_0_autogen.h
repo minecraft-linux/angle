@@ -102,7 +102,6 @@
     GLboolean isSampler(SamplerID samplerPacked) const;                                            \
     GLboolean isSync(SyncID syncPacked) const;                                                     \
     GLboolean isTransformFeedback(TransformFeedbackID idPacked) const;                             \
-    GLboolean isVertexArray(VertexArrayID arrayPacked) const;                                      \
     void *mapBufferRange(BufferBinding targetPacked, GLintptr offset, GLsizeiptr length,           \
                          GLbitfield access);                                                       \
     void pauseTransformFeedback();                                                                 \
@@ -153,7 +152,6 @@
     void uniformMatrix4x3fv(UniformLocation locationPacked, GLsizei count, GLboolean transpose,    \
                             const GLfloat *value);                                                 \
     GLboolean unmapBuffer(BufferBinding targetPacked);                                             \
-    void vertexAttribDivisor(GLuint index, GLuint divisor);                                        \
     void vertexAttribIPointer(GLuint index, GLint size, VertexAttribType typePacked,               \
                               GLsizei stride, const void *pointer);                                \
     void waitSync(SyncID syncPacked, GLbitfield flags, GLuint64 timeout);

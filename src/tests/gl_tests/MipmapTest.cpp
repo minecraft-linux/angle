@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 
 #include "test_utils/gl_raii.h"
@@ -557,6 +561,31 @@ TEST_P(MipmapTestES3, GenerateMipmap1x1Texture)
     // Then generate the mips.
     glGenerateMipmap(GL_TEXTURE_2D);
     ASSERT_GL_NO_ERROR();
+
+    // Verify that every mip is correct.
+    verifyAllMips(kTextureSize, kTextureSize, kInitialColor[0]);
+}
+
+// This test generates mipmaps twice in a row.
+TEST_P(MipmapTestES3, GenerateMipmapTwice)
+{
+    constexpr uint32_t kTextureSize = 1024;
+
+    const std::vector<GLColor> kInitialColor(kTextureSize * kTextureSize,
+                                             GLColor(35, 81, 184, 211));
+
+    // Create the texture.
+    glBindTexture(GL_TEXTURE_2D, mTexture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, kTextureSize, kTextureSize, 0, GL_RGBA,
+                 GL_UNSIGNED_BYTE, kInitialColor.data());
+
+    // Then generate the mips twice.
+    glGenerateMipmap(GL_TEXTURE_2D);
+    glGenerateMipmap(GL_TEXTURE_2D);
+    ASSERT_GL_NO_ERROR();
+
+    // Enable mipmaps.
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
 
     // Verify that every mip is correct.
     verifyAllMips(kTextureSize, kTextureSize, kInitialColor[0]);
@@ -1503,6 +1532,58 @@ TEST_P(MipmapTestES3, MipmapForDeepTextureArray)
     EXPECT_PIXEL_COLOR_EQ(px, py, GLColor::red);
 }
 
+// Creates a mipmapped 3D texture with 1x1x2 size, GL_ALPHA, and calls GenerateMipmap. Should not
+// crash. Tests the case where the format is non-renderable and depth has more mip levels than
+// width, height.
+TEST_P(MipmapTestES3, MipmapsForTexture3DNonRenderableMoreMipLevelsInDepthNoCrash)
+{
+    int px = getWindowWidth() / 2;
+    int py = getWindowHeight() / 2;
+
+    glUseProgram(m3DProgram);
+    EXPECT_GL_NO_ERROR();
+
+    glBindTexture(GL_TEXTURE_3D, mTexture);
+    uint8_t colors[] = {5, 200};
+    glPixelStorei(GL_UNPACK_ALIGNMENT, 1);
+    glTexImage3D(GL_TEXTURE_3D, 0, GL_ALPHA, 1, 1, 2, 0, GL_ALPHA, GL_UNSIGNED_BYTE, &colors);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MIN_FILTER, GL_NEAREST_MIPMAP_NEAREST);
+    glTexParameteri(GL_TEXTURE_3D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    EXPECT_GL_NO_ERROR();
+    glGenerateMipmap(GL_TEXTURE_3D);
+    EXPECT_GL_NO_ERROR();
+
+    // Mipmap level 0 slice 0.
+    glUniform1f(mTexture3DLODUniformLocation, 0.);
+    glUniform1f(mTexture3DSliceUniformLocation, 0.25f);
+    drawQuad(m3DProgram, "position", 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(px, py, GLColor(0, 0, 0, 5));
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    // Mipmap level 0 slice 1.
+    glUniform1f(mTexture3DSliceUniformLocation, 0.75f);
+    drawQuad(m3DProgram, "position", 0.5f);
+    EXPECT_GL_NO_ERROR();
+    EXPECT_PIXEL_COLOR_EQ(px, py, GLColor(0, 0, 0, 200));
+
+    // Mipmap level 1 slice 0, the only slice.
+    glUniform1f(mTexture3DLODUniformLocation, 1.);
+    glUniform1f(mTexture3DSliceUniformLocation, 0.);
+    drawQuad(m3DProgram, "position", 0.5f);
+    EXPECT_GL_NO_ERROR();
+    GLColor pixel;
+    glReadPixels(px, py, 1, 1, GL_RGBA, GL_UNSIGNED_BYTE, pixel.data());
+    GLColor err(0, 0, 0, 1);
+    // Nearest or box filtering implementation.
+    if (!(pixel.ExpectNear(GLColor(0, 0, 0, 5), err) ||
+          pixel.ExpectNear(GLColor(0, 0, 0, 102), err) ||
+          pixel.ExpectNear(GLColor(0, 0, 0, 200), err)))
+    {
+        FAIL() << "Unexpected pixel color: " << pixel;
+    }
+}
+
 // Creates a mipmapped 3D texture with two layers, and calls ANGLE's GenerateMipmap.
 // Then tests if the mipmaps are rendered correctly for all two layers.
 TEST_P(MipmapTestES3, MipmapsForTexture3D)
@@ -2391,22 +2472,18 @@ TEST_P(MipmapTestES31, GenerateLowerMipsWithDraw)
 
 // Use this to select which configurations (e.g. which renderer, which GLES major version) these
 // tests should be run against.
-ANGLE_INSTANTIATE_TEST_ES2_AND_ES3(MipmapTest);
-
-namespace extraPlatforms
-{
-ANGLE_INSTANTIATE_TEST(MipmapTest,
-                       ES2_METAL().disable(Feature::AllowGenMultipleMipsPerPass),
-                       ES2_OPENGLES().enable(Feature::UseIntermediateTextureForGenerateMipmap));
+ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND(
+    MipmapTest,
+    ES2_METAL().disable(Feature::AllowGenMultipleMipsPerPass),
+    ES2_OPENGLES().enable(Feature::UseIntermediateTextureForGenerateMipmap));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(Mipmap3DBoxFilterTest);
 ANGLE_INSTANTIATE_TEST(Mipmap3DBoxFilterTest,
                        ES2_METAL(),
                        ES2_METAL().disable(Feature::AllowGenMultipleMipsPerPass));
-}  // namespace extraPlatforms
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(MipmapTestES3);
-ANGLE_INSTANTIATE_TEST_ES3(MipmapTestES3);
+ANGLE_INSTANTIATE_TEST_ES3_AND(MipmapTestES3, ES3_WEBGPU());
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(MipmapTestES31);
 ANGLE_INSTANTIATE_TEST_ES31(MipmapTestES31);

@@ -7,6 +7,10 @@
 // formatutils9.cpp: Queries for GL image formats and their translations to D3D9
 // formats.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d9/formatutils9.h"
 
 #include "image_util/copyimage.h"
@@ -148,6 +152,7 @@ static D3D9FormatMap BuildD3D9FormatMap()
     InsertD3D9FormatInfo(&map, GL_SRGB8,                            D3DFMT_X8R8G8B8,      D3DFMT_UNKNOWN,        LoadRGB8ToBGRX8                           );
     InsertD3D9FormatInfo(&map, GL_SRGB8_ALPHA8_EXT,                 D3DFMT_A8R8G8B8,      D3DFMT_A8R8G8B8,       LoadRGBA8ToBGRA8                          );
 
+    InsertD3D9FormatInfo(&map, GL_BGRA_EXT,                         D3DFMT_A8R8G8B8,      D3DFMT_A8R8G8B8,       LoadToNative<GLubyte, 4>                  );
     InsertD3D9FormatInfo(&map, GL_BGRA8_EXT,                        D3DFMT_A8R8G8B8,      D3DFMT_A8R8G8B8,       LoadToNative<GLubyte, 4>                  );
     InsertD3D9FormatInfo(&map, GL_BGRA4_ANGLEX,                     D3DFMT_A8R8G8B8,      D3DFMT_A8R8G8B8,       LoadBGRA4ToBGRA8                          );
     InsertD3D9FormatInfo(&map, GL_BGR5_A1_ANGLEX,                   D3DFMT_A8R8G8B8,      D3DFMT_A8R8G8B8,       LoadBGR5A1ToBGRA8                         );

@@ -3,9 +3,13 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 //
-// FramebufferMtl.mm:
+// FrameBufferMtl.mm:
 //    Implements the class methods for FramebufferMtl.
 //
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/angletypes.h"
 #include "libANGLE/renderer/metal/ContextMtl.h"
@@ -1751,11 +1755,11 @@ angle::Result FramebufferMtl::readPixelsToBuffer(const gl::Context *context,
         params.texture                = texture;
         params.textureArea            = area;
         params.textureLevel           = renderTarget->getLevelIndex();
-        params.textureSliceOrDeph     = renderTarget->getLayerIndex();
+        params.textureSliceOrDepth    = renderTarget->getLayerIndex();
         params.reverseTextureRowOrder = reverseRowOrder;
 
-        ANGLE_TRY(contextMtl->getDisplay()->getUtils().packPixelsFromTextureToBuffer(
-            contextMtl, *actualDstAngleFormat, params));
+        ANGLE_TRY(contextMtl->getDisplay()->getUtils().packPixelsCS(contextMtl,
+                                                                    *actualDstAngleFormat, params));
     }
     else
     {

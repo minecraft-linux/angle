@@ -4,10 +4,15 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <variant>
 
 #include "test_utils/ANGLETest.h"
 
+#include "common/gl_enum_utils.h"
 #include "test_utils/gl_raii.h"
 #include "util/random_utils.h"
 #include "util/shader_utils.h"
@@ -118,8 +123,27 @@ class ClearTestES3 : public ClearTestBase
             glDepthMask(GL_FALSE);
         }
         glDepthFunc(GL_LESS);
-        drawQuad(depthTestProgram, essl1_shaders::PositionAttrib(), depthValue * 2 - 1 - 0.01f);
-        drawQuad(depthTestProgramFail, essl1_shaders::PositionAttrib(), depthValue * 2 - 1 + 0.01f);
+
+        GLfloat normalizedDepth = depthValue * 2 - 1;
+
+        // A depth value clamped to 0.0 will be normalized to -1.0. In this case, clear the color
+        // buffer to blue and then attempt to draw red only. Otherwise, attempt to draw blue and
+        // red.
+        if (normalizedDepth < -0.999999f)
+        {
+            glClearColor(0.0, 0.0, 1.0, 1.0);
+            glClear(GL_COLOR_BUFFER_BIT);
+            GLfloat redNormalizedDepth = normalizedDepth + 0.01f;
+            drawQuad(depthTestProgramFail, essl1_shaders::PositionAttrib(), redNormalizedDepth);
+        }
+        else
+        {
+            GLfloat blueNormalizedDepth = normalizedDepth - 0.01f;
+            GLfloat redNormalizedDepth  = normalizedDepth + 0.01f;
+            drawQuad(depthTestProgram, essl1_shaders::PositionAttrib(), blueNormalizedDepth);
+            drawQuad(depthTestProgramFail, essl1_shaders::PositionAttrib(), redNormalizedDepth);
+        }
+
         if (!hasDepthTest)
         {
             glDisable(GL_DEPTH_TEST);
@@ -213,7 +237,31 @@ class ClearTextureEXTTest : public ANGLETest<>
     }
 };
 
-class ClearTextureEXTTestES31 : public ANGLETest<>
+struct ClearTextureParams
+{
+    FormatTableElement format;
+    GLenum textureType;
+};
+
+using ClearTextureVariationsTestParams = std::tuple<angle::PlatformParameters, ClearTextureParams>;
+
+std::string ClearTextureVariationsTestPrint(
+    const ::testing::TestParamInfo<ClearTextureVariationsTestParams> &paramsInfo)
+{
+    const ClearTextureVariationsTestParams &params = paramsInfo.param;
+    std::ostringstream out;
+
+    ClearTextureParams clearParams = std::get<1>(params);
+    out << std::get<0>(params) << "__"
+        << gl::GLenumToString(gl::GLESEnum::AllEnums, clearParams.format.internalformat) << "_"
+        << gl::GLenumToString(gl::GLESEnum::AllEnums, clearParams.format.format) << "_"
+        << gl::GLenumToString(gl::GLESEnum::AllEnums, clearParams.format.type) << "_"
+        << gl::GLenumToString(gl::GLESEnum::AllEnums, clearParams.textureType);
+
+    return out.str();
+}
+
+class ClearTextureEXTTestES31 : public ANGLETest<ClearTextureVariationsTestParams>
 {
   protected:
     ClearTextureEXTTestES31()
@@ -233,20 +281,7 @@ class ClearTextureEXTTestES31 : public ANGLETest<>
         mLevels = std::log2(std::max(mWidth, mHeight)) + 1;
     }
 
-    // Texture's information.
-    int mWidth;
-    int mHeight;
-    int mDepth;
-    int mLevels;
-
-    GLenum mTarget;
-
-    bool mIsArray      = true;
-    bool mHasLayer     = true;
-    bool mExtraSupport = true;
-
-    GLColor mFullColorRef    = GLColor::red;
-    GLColor mPartialColorRef = GLColor::blue;
+    void setTestParams();
 
     // Convert the reference color so that it can be suitable for different type of format.
     ColorTypes convertColorTypeInternal(const GLenum &type, const GLColor &color);
@@ -292,7 +327,53 @@ class ClearTextureEXTTestES31 : public ANGLETest<>
                                 ColorTypes &fullColor,
                                 GLColor &partialColorRef,
                                 ColorTypes &partialColor);
+
+    // Texture's information.
+    int mWidth;
+    int mHeight;
+    int mDepth;
+    int mLevels;
+
+    GLenum mTarget;
+
+    bool mIsArray      = true;
+    bool mHasLayer     = true;
+    bool mExtraSupport = true;
+
+    GLColor mFullColorRef    = GLColor::red;
+    GLColor mPartialColorRef = GLColor::blue;
 };
+
+void ClearTextureEXTTestES31::setTestParams()
+{
+    mTarget = std::get<1>(GetParam()).textureType;
+
+    switch (mTarget)
+    {
+        case GL_TEXTURE_2D:
+            mDepth   = 1;
+            mIsArray = mHasLayer = false;
+            break;
+        case GL_TEXTURE_2D_ARRAY:
+            break;
+        case GL_TEXTURE_3D:
+            mIsArray = false;
+            break;
+        case GL_TEXTURE_CUBE_MAP:
+            mHeight = mWidth;
+            mDepth  = 6;
+            mLevels = std::log2(mWidth) + 1;
+            break;
+        case GL_TEXTURE_CUBE_MAP_ARRAY:
+            mHeight       = mWidth;
+            mDepth        = 2 * 6;
+            mLevels       = std::log2(mWidth) + 1;
+            mExtraSupport = IsGLExtensionEnabled("GL_EXT_texture_cube_map_array");
+            break;
+        default:
+            ASSERT(false);
+    }
+}
 
 ColorTypes ClearTextureEXTTestES31::convertColorTypeInternal(const GLenum &type,
                                                              const GLColor &color)
@@ -995,267 +1076,239 @@ void ClearTextureEXTTestES31::clearCheckUnrenderable(int level,
     }
 }
 
+constexpr std::array<ClearTextureParams, 46> kClearTextureRenderableFormats = {{
+    {{GL_R8, GL_RED, GL_UNSIGNED_BYTE}, GL_TEXTURE_2D},
+    {{GL_R16F, GL_RED, GL_HALF_FLOAT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_R16F, GL_RED, GL_FLOAT}, GL_TEXTURE_3D},
+    {{GL_R32F, GL_RED, GL_FLOAT}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RG8, GL_RG, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RG16F, GL_RG, GL_HALF_FLOAT}, GL_TEXTURE_2D},
+    {{GL_RG16F, GL_RG, GL_FLOAT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RG32F, GL_RG, GL_FLOAT}, GL_TEXTURE_3D},
+    {{GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE}, GL_TEXTURE_2D},
+    {{GL_R11F_G11F_B10F, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV}, GL_TEXTURE_2D_ARRAY},
+    {{GL_R11F_G11F_B10F, GL_RGB, GL_HALF_FLOAT}, GL_TEXTURE_3D},
+    {{GL_R11F_G11F_B10F, GL_RGB, GL_FLOAT}, GL_TEXTURE_CUBE_MAP},
+    {{GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_BYTE}, GL_TEXTURE_2D},
+    {{GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV}, GL_TEXTURE_3D},
+    {{GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RGBA4, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4}, GL_TEXTURE_2D},
+    {{GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT}, GL_TEXTURE_3D},
+    {{GL_RGBA16F, GL_RGBA, GL_FLOAT}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RGBA32F, GL_RGBA, GL_FLOAT}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_R16_EXT, GL_RED, GL_UNSIGNED_SHORT}, GL_TEXTURE_2D},
+    {{GL_RG16_EXT, GL_RG, GL_UNSIGNED_SHORT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGBA16_EXT, GL_RGBA, GL_UNSIGNED_SHORT}, GL_TEXTURE_3D},
+    {{GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP},
+    {{GL_R8I, GL_RED_INTEGER, GL_BYTE}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT}, GL_TEXTURE_2D},
+    {{GL_R16I, GL_RED_INTEGER, GL_SHORT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT}, GL_TEXTURE_3D},
+    {{GL_R32I, GL_RED_INTEGER, GL_INT}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RG8UI, GL_RG_INTEGER, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RG8I, GL_RG_INTEGER, GL_BYTE}, GL_TEXTURE_2D},
+    {{GL_RG16UI, GL_RG_INTEGER, GL_UNSIGNED_SHORT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RG16I, GL_RG_INTEGER, GL_SHORT}, GL_TEXTURE_3D},
+    {{GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RG32I, GL_RG_INTEGER, GL_INT}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE}, GL_TEXTURE_2D},
+    {{GL_RGBA8I, GL_RGBA_INTEGER, GL_BYTE}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT}, GL_TEXTURE_3D},
+    {{GL_RGBA16I, GL_RGBA_INTEGER, GL_SHORT}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RGBA32I, GL_RGBA_INTEGER, GL_INT}, GL_TEXTURE_2D},
+}};
+
 class ClearTextureEXTTestES31Renderable : public ClearTextureEXTTestES31
 {
   protected:
-    std::vector<FormatTableElement> mFormats = {
-        {GL_R8, GL_RED, GL_UNSIGNED_BYTE},
-        {GL_R16F, GL_RED, GL_HALF_FLOAT},
-        {GL_R16F, GL_RED, GL_FLOAT},
-        {GL_R32F, GL_RED, GL_FLOAT},
-        {GL_RG8, GL_RG, GL_UNSIGNED_BYTE},
-        {GL_RG16F, GL_RG, GL_HALF_FLOAT},
-        {GL_RG16F, GL_RG, GL_FLOAT},
-        {GL_RG32F, GL_RG, GL_FLOAT},
-        {GL_RGB8, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_RGB565, GL_RGB, GL_UNSIGNED_SHORT_5_6_5},
-        {GL_RGB565, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_R11F_G11F_B10F, GL_RGB, GL_UNSIGNED_INT_10F_11F_11F_REV},
-        {GL_R11F_G11F_B10F, GL_RGB, GL_HALF_FLOAT},
-        {GL_R11F_G11F_B10F, GL_RGB, GL_FLOAT},
-        {GL_SRGB8_ALPHA8, GL_RGBA, GL_UNSIGNED_BYTE},
-        {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_BYTE},
-        {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_SHORT_5_5_5_1},
-        {GL_RGB5_A1, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},
-        {GL_RGBA8, GL_RGBA, GL_UNSIGNED_BYTE},
-        {GL_RGBA4, GL_RGBA, GL_UNSIGNED_BYTE},
-        {GL_RGBA4, GL_RGBA, GL_UNSIGNED_SHORT_4_4_4_4},
-        {GL_RGB10_A2, GL_RGBA, GL_UNSIGNED_INT_2_10_10_10_REV},
-        {GL_RGBA16F, GL_RGBA, GL_HALF_FLOAT},
-        {GL_RGBA16F, GL_RGBA, GL_FLOAT},
-        {GL_RGBA32F, GL_RGBA, GL_FLOAT},
-        {GL_R16_EXT, GL_RED, GL_UNSIGNED_SHORT},
-        {GL_RG16_EXT, GL_RG, GL_UNSIGNED_SHORT},
-        {GL_RGBA16_EXT, GL_RGBA, GL_UNSIGNED_SHORT},
-        {GL_R8UI, GL_RED_INTEGER, GL_UNSIGNED_BYTE},
-        {GL_R8I, GL_RED_INTEGER, GL_BYTE},
-        {GL_R16UI, GL_RED_INTEGER, GL_UNSIGNED_SHORT},
-        {GL_R16I, GL_RED_INTEGER, GL_SHORT},
-        {GL_R32UI, GL_RED_INTEGER, GL_UNSIGNED_INT},
-        {GL_R32I, GL_RED_INTEGER, GL_INT},
-        {GL_RG8UI, GL_RG_INTEGER, GL_UNSIGNED_BYTE},
-        {GL_RG8I, GL_RG_INTEGER, GL_BYTE},
-        {GL_RG16UI, GL_RG_INTEGER, GL_UNSIGNED_SHORT},
-        {GL_RG16I, GL_RG_INTEGER, GL_SHORT},
-        {GL_RG32UI, GL_RG_INTEGER, GL_UNSIGNED_INT},
-        {GL_RG32I, GL_RG_INTEGER, GL_INT},
-        {GL_RGBA8UI, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE},
-        {GL_RGBA8I, GL_RGBA_INTEGER, GL_BYTE},
-        {GL_RGBA16UI, GL_RGBA_INTEGER, GL_UNSIGNED_SHORT},
-        {GL_RGBA16I, GL_RGBA_INTEGER, GL_SHORT},
-        {GL_RGBA32UI, GL_RGBA_INTEGER, GL_UNSIGNED_INT},
-        {GL_RGBA32I, GL_RGBA_INTEGER, GL_INT},
-    };
-
     void testRenderable()
     {
+        FormatTableElement fmt = std::get<1>(GetParam()).format;
+
         ANGLE_SKIP_TEST_IF(getClientMajorVersion() < 3 ||
                            !IsGLExtensionEnabled("GL_EXT_clear_texture") || !mExtraSupport);
+        ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_norm16") &&
+                           requiredNorm16(fmt.internalformat));
 
-        const auto test = [&](FormatTableElement &fmt) {
-            // Update MAX level numbers.
-            if (mTarget == GL_TEXTURE_3D)
-            {
-                mLevels = std::max(mLevels, static_cast<int>(std::log2(mDepth)) + 1);
-            }
-
-            GLTexture tex;
-            initTexture(mLevels, fmt, tex);
-
-            GLFramebuffer fbo;
-            glBindFramebuffer(GL_FRAMEBUFFER, fbo);
-
-            // Calculate specific clear color value.
-            GLColor fullColorRef    = getClearColor(fmt.format, mFullColorRef);
-            ColorTypes fullColor    = convertColorType(fmt.format, fmt.type, fullColorRef);
-            GLColor partialColorRef = getClearColor(fmt.format, mPartialColorRef);
-            ColorTypes partialColor = convertColorType(fmt.format, fmt.type, partialColorRef);
-
-            for (int level = 0; level < mLevels; ++level)
-            {
-                int width  = std::max(mWidth >> level, 1);
-                int height = std::max(mHeight >> level, 1);
-                int depth  = mIsArray ? mDepth : std::max(mDepth >> level, 1);
-
-                clearCheckRenderable(level, width, height, depth, tex, fmt, fullColorRef, fullColor,
-                                     partialColorRef, partialColor);
-            }
-        };
-
-        bool supportNorm16 = IsGLExtensionEnabled("GL_EXT_texture_norm16");
-        for (auto fmt : mFormats)
+        // Update MAX level numbers.
+        if (mTarget == GL_TEXTURE_3D)
         {
-            if (!supportNorm16 && requiredNorm16(fmt.internalformat))
-            {
-                continue;
-            }
-            test(fmt);
+            mLevels = std::max(mLevels, static_cast<int>(std::log2(mDepth)) + 1);
+        }
+
+        GLTexture tex;
+        initTexture(mLevels, fmt, tex);
+
+        GLFramebuffer fbo;
+        glBindFramebuffer(GL_FRAMEBUFFER, fbo);
+
+        // Calculate specific clear color value.
+        GLColor fullColorRef    = getClearColor(fmt.format, mFullColorRef);
+        ColorTypes fullColor    = convertColorType(fmt.format, fmt.type, fullColorRef);
+        GLColor partialColorRef = getClearColor(fmt.format, mPartialColorRef);
+        ColorTypes partialColor = convertColorType(fmt.format, fmt.type, partialColorRef);
+
+        for (int level = 0; level < mLevels; ++level)
+        {
+            int width  = std::max(mWidth >> level, 1);
+            int height = std::max(mHeight >> level, 1);
+            int depth  = mIsArray ? mDepth : std::max(mDepth >> level, 1);
+
+            clearCheckRenderable(level, width, height, depth, tex, fmt, fullColorRef, fullColor,
+                                 partialColorRef, partialColor);
         }
     }
 
     void testMS()
     {
+        FormatTableElement fmt = std::get<1>(GetParam()).format;
+
         ANGLE_SKIP_TEST_IF(getClientMajorVersion() < 3 ||
                            !IsGLExtensionEnabled("GL_EXT_clear_texture") || !mExtraSupport);
+        ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_norm16") &&
+                           requiredNorm16(fmt.internalformat));
 
-        const auto test = [&](FormatTableElement &fmt) {
-            // Initialize the texture.
-            GLTexture tex;
-            glBindTexture(mTarget, tex);
-            int sampleNum = 0;
-            glGetInternalformativ(mTarget, fmt.internalformat, GL_SAMPLES, 1, &sampleNum);
-            sampleNum = std::min(sampleNum, 4);
-            if (mIsArray)
-            {
-                glTexStorage3DMultisampleOES(mTarget, sampleNum, fmt.internalformat, mWidth,
-                                             mHeight, mDepth, GL_TRUE);
-            }
-            else
-            {
-                glTexStorage2DMultisample(mTarget, sampleNum, fmt.internalformat, mWidth, mHeight,
-                                          GL_TRUE);
-            }
-            EXPECT_GL_ERROR(GL_NO_ERROR);
-            ANGLE_GL_PROGRAM(initProgram, essl31_shaders::vs::Simple(),
-                             essl31_shaders::fs::Green());
-            glUseProgram(initProgram);
-            drawQuad(initProgram, essl31_shaders::PositionAttrib(), 0.5f);
-
-            // Calculate specific clear color value.
-            GLColor fullColorRef    = getClearColor(fmt.format, mFullColorRef);
-            ColorTypes fullColor    = convertColorType(fmt.format, fmt.type, fullColorRef);
-            GLColor partialColorRef = getClearColor(fmt.format, mPartialColorRef);
-            ColorTypes partialColor = convertColorType(fmt.format, fmt.type, partialColorRef);
-
-            ANGLE_GL_PROGRAM(program, getVertexShader(mTarget).c_str(),
-                             getFragmentShader(mTarget, fmt.isInt(), fmt.isUInt()).c_str());
-            glUseProgram(program);
-
-            std::vector<int> uniformLocs = {0, 0, 0};
-
-            uniformLocs[0] = glGetUniformLocation(program, "s");
-            ASSERT_NE(-1, uniformLocs[0]);
-            uniformLocs[2] = glGetUniformLocation(program, "texsize");
-            ASSERT_NE(-1, uniformLocs[2]);
-            glUniform2f(uniformLocs[2], static_cast<float>(mWidth), static_cast<float>(mHeight));
-            if (mIsArray)
-            {
-                uniformLocs[1] = glGetUniformLocation(program, "slice");
-                ASSERT_NE(-1, uniformLocs[1]);
-            }
-
-            clearCheckUnrenderable(0, mWidth, mHeight, mDepth, tex, fmt, program, uniformLocs,
-                                   fullColorRef, fullColor, partialColorRef, partialColor);
-        };
-
-        bool supportNorm16 = IsGLExtensionEnabled("GL_EXT_texture_norm16");
-        for (auto fmt : mFormats)
+        // Initialize the texture.
+        GLTexture tex;
+        glBindTexture(mTarget, tex);
+        int sampleNum = 0;
+        glGetInternalformativ(mTarget, fmt.internalformat, GL_SAMPLES, 1, &sampleNum);
+        sampleNum = std::min(sampleNum, 4);
+        if (mIsArray)
         {
-            if (!supportNorm16 && requiredNorm16(fmt.internalformat))
-            {
-                continue;
-            }
-            test(fmt);
+            glTexStorage3DMultisampleOES(mTarget, sampleNum, fmt.internalformat, mWidth, mHeight,
+                                         mDepth, GL_TRUE);
         }
+        else
+        {
+            glTexStorage2DMultisample(mTarget, sampleNum, fmt.internalformat, mWidth, mHeight,
+                                      GL_TRUE);
+        }
+        EXPECT_GL_ERROR(GL_NO_ERROR);
+        ANGLE_GL_PROGRAM(initProgram, essl31_shaders::vs::Simple(), essl31_shaders::fs::Green());
+        glUseProgram(initProgram);
+        drawQuad(initProgram, essl31_shaders::PositionAttrib(), 0.5f);
+
+        // Calculate specific clear color value.
+        GLColor fullColorRef    = getClearColor(fmt.format, mFullColorRef);
+        ColorTypes fullColor    = convertColorType(fmt.format, fmt.type, fullColorRef);
+        GLColor partialColorRef = getClearColor(fmt.format, mPartialColorRef);
+        ColorTypes partialColor = convertColorType(fmt.format, fmt.type, partialColorRef);
+
+        ANGLE_GL_PROGRAM(program, getVertexShader(mTarget).c_str(),
+                         getFragmentShader(mTarget, fmt.isInt(), fmt.isUInt()).c_str());
+        glUseProgram(program);
+
+        std::vector<int> uniformLocs = {0, 0, 0};
+
+        uniformLocs[0] = glGetUniformLocation(program, "s");
+        ASSERT_NE(-1, uniformLocs[0]);
+        uniformLocs[2] = glGetUniformLocation(program, "texsize");
+        ASSERT_NE(-1, uniformLocs[2]);
+        glUniform2f(uniformLocs[2], static_cast<float>(mWidth), static_cast<float>(mHeight));
+        if (mIsArray)
+        {
+            uniformLocs[1] = glGetUniformLocation(program, "slice");
+            ASSERT_NE(-1, uniformLocs[1]);
+        }
+
+        clearCheckUnrenderable(0, mWidth, mHeight, mDepth, tex, fmt, program, uniformLocs,
+                               fullColorRef, fullColor, partialColorRef, partialColor);
     }
 };
+
+constexpr std::array<ClearTextureParams, 24> kClearTextureUnrenderableFormats = {{
+    {{GL_RGB16F, GL_RGB, GL_HALF_FLOAT}, GL_TEXTURE_2D},
+    {{GL_RGB16F, GL_RGB, GL_FLOAT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGB8UI, GL_RGB_INTEGER, GL_UNSIGNED_BYTE}, GL_TEXTURE_3D},
+    {{GL_RGB8I, GL_RGB_INTEGER, GL_BYTE}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RGB16UI, GL_RGB_INTEGER, GL_UNSIGNED_SHORT}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RGB16I, GL_RGB_INTEGER, GL_SHORT}, GL_TEXTURE_2D},
+    {{GL_RGB32UI, GL_RGB_INTEGER, GL_UNSIGNED_INT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGB32I, GL_RGB_INTEGER, GL_INT}, GL_TEXTURE_3D},
+    {{GL_SRGB8, GL_RGB, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP},
+    {{GL_R8_SNORM, GL_RED, GL_BYTE}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_RG8_SNORM, GL_RG, GL_BYTE}, GL_TEXTURE_2D},
+    {{GL_RGB8_SNORM, GL_RGB, GL_BYTE}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGB32F, GL_RGB, GL_FLOAT}, GL_TEXTURE_3D},
+    {{GL_RGBA8_SNORM, GL_RGBA, GL_BYTE}, GL_TEXTURE_CUBE_MAP},
+    {{GL_RGB16_EXT, GL_RGB, GL_UNSIGNED_SHORT}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_R16_SNORM_EXT, GL_RED, GL_SHORT}, GL_TEXTURE_2D},
+    {{GL_RG16_SNORM_EXT, GL_RG, GL_SHORT}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGBA16_SNORM_EXT, GL_RGBA, GL_SHORT}, GL_TEXTURE_3D},
+    {{GL_LUMINANCE_ALPHA, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP},
+    {{GL_LUMINANCE, GL_LUMINANCE, GL_UNSIGNED_BYTE}, GL_TEXTURE_CUBE_MAP_ARRAY},
+    {{GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE}, GL_TEXTURE_2D},
+    {{GL_RGB9_E5, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV}, GL_TEXTURE_2D_ARRAY},
+    {{GL_RGB9_E5, GL_RGB, GL_HALF_FLOAT}, GL_TEXTURE_3D},
+    {{GL_RGB9_E5, GL_RGB, GL_FLOAT}, GL_TEXTURE_CUBE_MAP},
+}};
 
 class ClearTextureEXTTestES31Unrenderable : public ClearTextureEXTTestES31
 {
   protected:
-    std::vector<FormatTableElement> mFormats = {
-        {GL_RGB16F, GL_RGB, GL_HALF_FLOAT},
-        {GL_RGB16F, GL_RGB, GL_FLOAT},
-        {GL_RGB8UI, GL_RGB_INTEGER, GL_UNSIGNED_BYTE},
-        {GL_RGB8I, GL_RGB_INTEGER, GL_BYTE},
-        {GL_RGB16UI, GL_RGB_INTEGER, GL_UNSIGNED_SHORT},
-        {GL_RGB16I, GL_RGB_INTEGER, GL_SHORT},
-        {GL_RGB32UI, GL_RGB_INTEGER, GL_UNSIGNED_INT},
-        {GL_RGB32I, GL_RGB_INTEGER, GL_INT},
-        {GL_SRGB8, GL_RGB, GL_UNSIGNED_BYTE},
-        {GL_R8_SNORM, GL_RED, GL_BYTE},
-        {GL_RG8_SNORM, GL_RG, GL_BYTE},
-        {GL_RGB8_SNORM, GL_RGB, GL_BYTE},
-        {GL_RGB32F, GL_RGB, GL_FLOAT},
-        {GL_RGBA8_SNORM, GL_RGBA, GL_BYTE},
-        {GL_RGB16_EXT, GL_RGB, GL_UNSIGNED_SHORT},
-        {GL_R16_SNORM_EXT, GL_RED, GL_SHORT},
-        {GL_RG16_SNORM_EXT, GL_RG, GL_SHORT},
-        {GL_RGBA16_SNORM_EXT, GL_RGBA, GL_SHORT},
-        {GL_LUMINANCE_ALPHA, GL_LUMINANCE_ALPHA, GL_UNSIGNED_BYTE},
-        {GL_LUMINANCE, GL_LUMINANCE, GL_UNSIGNED_BYTE},
-        {GL_ALPHA, GL_ALPHA, GL_UNSIGNED_BYTE},
-    };
-
-    std::vector<FormatTableElement> mFormatsRGB9E5 = {
-        {GL_RGB9_E5, GL_RGB, GL_UNSIGNED_INT_5_9_9_9_REV},
-        {GL_RGB9_E5, GL_RGB, GL_HALF_FLOAT},
-        {GL_RGB9_E5, GL_RGB, GL_FLOAT},
-    };
-
-    void testUnrenderable(std::vector<FormatTableElement> &formats)
+    void testUnrenderable()
     {
+        FormatTableElement fmt = std::get<1>(GetParam()).format;
+
         ANGLE_SKIP_TEST_IF(getClientMajorVersion() < 3 ||
                            !IsGLExtensionEnabled("GL_EXT_clear_texture") || !mExtraSupport);
+        ANGLE_SKIP_TEST_IF(!IsGLExtensionEnabled("GL_EXT_texture_norm16") &&
+                           requiredNorm16(fmt.internalformat));
 
-        const auto test = [&](FormatTableElement &fmt) {
-            // Update MAX level numbers.
-            if (mTarget == GL_TEXTURE_3D)
-            {
-                mLevels = std::max(mLevels, static_cast<int>(std::log2(mDepth)) + 1);
-            }
-
-            GLTexture tex;
-            initTexture(mLevels, fmt, tex);
-
-            // Calculate specific clear color value.
-            GLColor fullColorRef    = getClearColor(fmt.format, mFullColorRef);
-            ColorTypes fullColor    = convertColorType(fmt.format, fmt.type, fullColorRef);
-            GLColor partialColorRef = getClearColor(fmt.format, mPartialColorRef);
-            ColorTypes partialColor = convertColorType(fmt.format, fmt.type, partialColorRef);
-
-            ANGLE_GL_PROGRAM(program, getVertexShader(mTarget).c_str(),
-                             getFragmentShader(mTarget, fmt.isInt(), fmt.isUInt()).c_str());
-            glUseProgram(program);
-
-            std::vector<int> uniformLocs = {0, 0};
-            if (mTarget == GL_TEXTURE_2D_ARRAY || mTarget == GL_TEXTURE_3D)
-            {
-                uniformLocs[0] = glGetUniformLocation(program, "slice");
-                ASSERT_NE(-1, uniformLocs[0]);
-            }
-            else if (mTarget == GL_TEXTURE_CUBE_MAP)
-            {
-                uniformLocs[0] = glGetUniformLocation(program, "cubeFace");
-            }
-            else if (mTarget == GL_TEXTURE_CUBE_MAP_ARRAY)
-            {
-                uniformLocs[0] = glGetUniformLocation(program, "cubeFace");
-                ASSERT_NE(-1, uniformLocs[0]);
-                uniformLocs[1] = glGetUniformLocation(program, "layer");
-                ASSERT_NE(-1, uniformLocs[1]);
-            }
-
-            // For each level, clear the texture.
-            for (int level = 0; level < mLevels; ++level)
-            {
-                int width  = std::max(mWidth >> level, 1);
-                int height = std::max(mHeight >> level, 1);
-                int depth  = mIsArray ? mDepth : std::max(mDepth >> level, 1);
-
-                clearCheckUnrenderable(level, width, height, depth, tex, fmt, program, uniformLocs,
-                                       fullColorRef, fullColor, partialColorRef, partialColor);
-            }
-        };
-
-        bool supportNorm16 = IsGLExtensionEnabled("GL_EXT_texture_norm16");
-        for (auto fmt : formats)
+        // Update MAX level numbers.
+        if (mTarget == GL_TEXTURE_3D)
         {
-            if (!supportNorm16 && requiredNorm16(fmt.internalformat))
-            {
-                continue;
-            }
-            test(fmt);
+            mLevels = std::max(mLevels, static_cast<int>(std::log2(mDepth)) + 1);
+        }
+
+        GLTexture tex;
+        initTexture(mLevels, fmt, tex);
+
+        // Calculate specific clear color value.
+        GLColor fullColorRef    = getClearColor(fmt.format, mFullColorRef);
+        ColorTypes fullColor    = convertColorType(fmt.format, fmt.type, fullColorRef);
+        GLColor partialColorRef = getClearColor(fmt.format, mPartialColorRef);
+        ColorTypes partialColor = convertColorType(fmt.format, fmt.type, partialColorRef);
+
+        ANGLE_GL_PROGRAM(program, getVertexShader(mTarget).c_str(),
+                         getFragmentShader(mTarget, fmt.isInt(), fmt.isUInt()).c_str());
+        glUseProgram(program);
+
+        std::vector<int> uniformLocs = {0, 0};
+        if (mTarget == GL_TEXTURE_2D_ARRAY || mTarget == GL_TEXTURE_3D)
+        {
+            uniformLocs[0] = glGetUniformLocation(program, "slice");
+            ASSERT_NE(-1, uniformLocs[0]);
+        }
+        else if (mTarget == GL_TEXTURE_CUBE_MAP)
+        {
+            uniformLocs[0] = glGetUniformLocation(program, "cubeFace");
+        }
+        else if (mTarget == GL_TEXTURE_CUBE_MAP_ARRAY)
+        {
+            uniformLocs[0] = glGetUniformLocation(program, "cubeFace");
+            ASSERT_NE(-1, uniformLocs[0]);
+            uniformLocs[1] = glGetUniformLocation(program, "layer");
+            ASSERT_NE(-1, uniformLocs[1]);
+        }
+
+        // For each level, clear the texture.
+        for (int level = 0; level < mLevels; ++level)
+        {
+            int width  = std::max(mWidth >> level, 1);
+            int height = std::max(mHeight >> level, 1);
+            int depth  = mIsArray ? mDepth : std::max(mDepth >> level, 1);
+
+            clearCheckUnrenderable(level, width, height, depth, tex, fmt, program, uniformLocs,
+                                   fullColorRef, fullColor, partialColorRef, partialColor);
         }
     }
 };
@@ -1564,6 +1617,26 @@ TEST_P(ClearTest, RGBA8Framebuffer)
     glClear(GL_COLOR_BUFFER_BIT);
 
     EXPECT_PIXEL_NEAR(0, 0, 128, 128, 128, 128, 1.0);
+}
+
+// Test clearing a BGRA8 Framebuffer
+TEST_P(ClearTest, BGRA8Framebuffer)
+{
+    ANGLE_SKIP_TEST_IF(getEGLWindow()->isFeatureEnabled(Feature::BgraTexImageFormatsBroken));
+
+    glBindFramebuffer(GL_FRAMEBUFFER, mFBOs[0]);
+
+    GLTexture texture;
+
+    glBindTexture(GL_TEXTURE_2D, texture);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_BGRA_EXT, getWindowWidth(), getWindowHeight(), 0, GL_BGRA_EXT,
+                 GL_UNSIGNED_BYTE, nullptr);
+    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D, texture, 0);
+
+    glClearColor(0.0f, 1.0f, 0.0f, 1.0f);
+    glClear(GL_COLOR_BUFFER_BIT);
+
+    EXPECT_PIXEL_NEAR(0, 0, 0, 255, 0, 255, 1.0);
 }
 
 // Test uploading a texture and then clearing a RGBA8 Framebuffer
@@ -4196,6 +4269,60 @@ TEST_P(ClearTestES3, RepeatedDepthClear)
     ASSERT_GL_NO_ERROR();
 }
 
+// Tests that calls to glClearBufferfi clamp the depth value.
+TEST_P(ClearTestES3, ClampDepthClearBufferfi)
+{
+    glClearBufferfi(GL_DEPTH_STENCIL, 0, -0.01f, 0x55);
+    verifyDepth(0.00f, 1);
+
+    glClearBufferfi(GL_DEPTH_STENCIL, 0, 0.00f, 0x55);
+    verifyDepth(0.00f, 1);
+
+    glClearBufferfi(GL_DEPTH_STENCIL, 0, 0.01f, 0x55);
+    verifyDepth(0.01f, 1);
+
+    glClearBufferfi(GL_DEPTH_STENCIL, 0, 0.99f, 0x55);
+    verifyDepth(0.99f, 1);
+
+    glClearBufferfi(GL_DEPTH_STENCIL, 0, 1.00f, 0x55);
+    verifyDepth(1.00f, 1);
+
+    glClearBufferfi(GL_DEPTH_STENCIL, 0, 1.01f, 0x55);
+    verifyDepth(1.0f, 1);
+
+    ASSERT_GL_NO_ERROR();
+}
+
+// Tests that calls to glClearBufferfv clamp the depth value.
+TEST_P(ClearTestES3, ClampDepthClearBufferfv)
+{
+    float depthClearValue = -0.01f;
+    glClearBufferfv(GL_DEPTH, 0, &depthClearValue);
+    verifyDepth(0.00f, 1);
+
+    depthClearValue = 0.00f;
+    glClearBufferfv(GL_DEPTH, 0, &depthClearValue);
+    verifyDepth(0.00f, 1);
+
+    depthClearValue = 0.01f;
+    glClearBufferfv(GL_DEPTH, 0, &depthClearValue);
+    verifyDepth(0.01f, 1);
+
+    depthClearValue = 0.99f;
+    glClearBufferfv(GL_DEPTH, 0, &depthClearValue);
+    verifyDepth(0.99f, 1);
+
+    depthClearValue = 1.00f;
+    glClearBufferfv(GL_DEPTH, 0, &depthClearValue);
+    verifyDepth(1.00f, 1);
+
+    depthClearValue = 1.01f;
+    glClearBufferfv(GL_DEPTH, 0, &depthClearValue);
+    verifyDepth(1.0f, 1);
+
+    ASSERT_GL_NO_ERROR();
+}
+
 // Test that reclearing stencil to the same value works.
 TEST_P(ClearTestES3, RepeatedStencilClear)
 {
@@ -6321,155 +6448,48 @@ TEST_P(ClearTextureEXTTest, ClearTextureAfterMaskedClearBug)
     }
 }
 
-// Test clearing renderable format textures with GL_EXT_clear_texture for TEXTURE_2D.
-TEST_P(ClearTextureEXTTestES31Renderable, Clear2D)
+// Test clearing renderable format textures with GL_EXT_clear_texture.
+TEST_P(ClearTextureEXTTestES31Renderable, Clear)
 {
-    mDepth   = 1;
-    mTarget  = GL_TEXTURE_2D;
-    mIsArray = mHasLayer = false;
+    setTestParams();
     testRenderable();
 }
 
-// Test clearing unrenderable format textures with GL_EXT_clear_texture for TEXTURE_2D.
-TEST_P(ClearTextureEXTTestES31Unrenderable, Clear2D)
+// Test clearing unrenderable format textures with GL_EXT_clear_texture.
+TEST_P(ClearTextureEXTTestES31Unrenderable, Clear)
 {
-    mDepth   = 1;
-    mTarget  = GL_TEXTURE_2D;
-    mIsArray = mHasLayer = false;
-    testUnrenderable(mFormats);
-}
-
-// Test clearing renderable format textures with GL_EXT_clear_texture for TEXTURE_2D_ARRAY.
-TEST_P(ClearTextureEXTTestES31Renderable, Clear2DArray)
-{
-    mTarget = GL_TEXTURE_2D_ARRAY;
-    testRenderable();
-}
-
-// Test clearing unrenderable format textures with GL_EXT_clear_texture for TEXTURE_2D_ARRAY.
-TEST_P(ClearTextureEXTTestES31Unrenderable, Clear2DArray)
-{
-    mTarget = GL_TEXTURE_2D_ARRAY;
-    testUnrenderable(mFormats);
-}
-
-// Test clearing renderable format textures with GL_EXT_clear_texture for TEXTURE_3D.
-TEST_P(ClearTextureEXTTestES31Renderable, Clear3D)
-{
-    mTarget  = GL_TEXTURE_3D;
-    mIsArray = false;
-    testRenderable();
-}
-
-// Test clearing unrenderable format textures with GL_EXT_clear_texture for TEXTURE_3D.
-TEST_P(ClearTextureEXTTestES31Unrenderable, Clear3D)
-{
-    mTarget  = GL_TEXTURE_3D;
-    mIsArray = false;
-    testUnrenderable(mFormats);
-}
-
-// Test clearing renderable format textures with GL_EXT_clear_texture for TEXTURE_CUBE_MAP.
-TEST_P(ClearTextureEXTTestES31Renderable, ClearCubeMap)
-{
-    mHeight = mWidth;
-    mDepth  = 6;
-    mLevels = std::log2(mWidth) + 1;
-    mTarget = GL_TEXTURE_CUBE_MAP;
-    testRenderable();
-}
-
-// Test clearing unrenderable format textures with GL_EXT_clear_texture for TEXTURE_CUBE_MAP.
-TEST_P(ClearTextureEXTTestES31Unrenderable, ClearCubeMap)
-{
-    mHeight = mWidth;
-    mDepth  = 6;
-    mLevels = std::log2(mWidth) + 1;
-    mTarget = GL_TEXTURE_CUBE_MAP;
-    testUnrenderable(mFormats);
-}
-
-// Test clearing renderable format textures with GL_EXT_clear_texture for
-// TEXTURE_CUBE_MAP_ARRAY.
-TEST_P(ClearTextureEXTTestES31Renderable, ClearCubeMapArray)
-{
-    mHeight       = mWidth;
-    mDepth        = 2 * 6;
-    mLevels       = std::log2(mWidth) + 1;
-    mTarget       = GL_TEXTURE_CUBE_MAP_ARRAY;
-    mExtraSupport = IsGLExtensionEnabled("GL_EXT_texture_cube_map_array");
-    testRenderable();
-}
-
-// Test clearing unrenderable format textures with GL_EXT_clear_texture for
-// TEXTURE_CUBE_MAP_ARRAY.
-TEST_P(ClearTextureEXTTestES31Unrenderable, ClearCubeMapArray)
-{
-    mHeight       = mWidth;
-    mDepth        = 2 * 6;
-    mLevels       = std::log2(mWidth) + 1;
-    mTarget       = GL_TEXTURE_CUBE_MAP_ARRAY;
-    mExtraSupport = IsGLExtensionEnabled("GL_EXT_texture_cube_map_array");
-    testUnrenderable(mFormats);
-}
-
-// Test clearing GL_RGB9_E5 format.
-TEST_P(ClearTextureEXTTestES31Unrenderable, ClearRGB9E5)
-{
-    // Test for TEXTURE_2D_ARRAY.
-    mTarget = GL_TEXTURE_2D_ARRAY;
-    testUnrenderable(mFormatsRGB9E5);
-
-    // Test for TEXTURE_3D.
-    mTarget  = GL_TEXTURE_3D;
-    mIsArray = false;
-    testUnrenderable(mFormatsRGB9E5);
-
-    // Test for TEXTURE_2D.
-    mDepth   = 1;
-    mLevels  = std::log2(std::max(mWidth, mHeight)) + 1;
-    mTarget  = GL_TEXTURE_2D;
-    mIsArray = mHasLayer = false;
-    testUnrenderable(mFormatsRGB9E5);
-
-    // Test for TEXTURE_CUBE_MAP.
-    mHeight  = mWidth;
-    mDepth   = 6;
-    mLevels  = std::log2(mWidth) + 1;
-    mTarget  = GL_TEXTURE_CUBE_MAP;
-    mIsArray = mHasLayer = true;
-    testUnrenderable(mFormatsRGB9E5);
-
-    // Test for TEXTURE_CUBE_MAP_ARRAY.
-    mDepth        = 2 * 6;
-    mTarget       = GL_TEXTURE_CUBE_MAP_ARRAY;
-    mExtraSupport = IsGLExtensionEnabled("GL_EXT_texture_cube_map_array");
-    testUnrenderable(mFormatsRGB9E5);
+    setTestParams();
+    testUnrenderable();
 }
 
 // Test clearing unrenderable format textures with GL_EXT_clear_texture for TEXTURE_2D_MULTISAMPLE.
 TEST_P(ClearTextureEXTTestES31Renderable, ClearMultisample)
 {
-    mDepth   = 1;
-    mTarget  = GL_TEXTURE_2D_MULTISAMPLE;
-    mIsArray = mHasLayer = false;
-    testMS();
-}
-
-// Test clearing unrenderable format textures with GL_EXT_clear_texture for
-// TEXTURE_2D_MULTISAMPLE_ARRAY.
-TEST_P(ClearTextureEXTTestES31Renderable, ClearMultisampleArray)
-{
-    mTarget       = GL_TEXTURE_2D_MULTISAMPLE_ARRAY_OES;
-    mExtraSupport = EnsureGLExtensionEnabled("GL_OES_texture_storage_multisample_2d_array");
+    // Divide up the tests between TEXTURE_2D_MULTISAMPLE and TEXTURE_2D_MULTISAMPLE_ARRAY.
+    switch (std::get<1>(GetParam()).textureType)
+    {
+        case GL_TEXTURE_2D:
+        case GL_TEXTURE_3D:
+            mDepth   = 1;
+            mTarget  = GL_TEXTURE_2D_MULTISAMPLE;
+            mIsArray = mHasLayer = false;
+            break;
+        case GL_TEXTURE_2D_ARRAY:
+        case GL_TEXTURE_CUBE_MAP:
+        case GL_TEXTURE_CUBE_MAP_ARRAY:
+            mTarget       = GL_TEXTURE_2D_MULTISAMPLE_ARRAY_OES;
+            mExtraSupport = EnsureGLExtensionEnabled("GL_OES_texture_storage_multisample_2d_array");
+            break;
+        default:
+            ASSERT(false);
+    }
     testMS();
 }
 
 ANGLE_INSTANTIATE_TEST_ES2_AND_ES3_AND(
     ClearTest,
     ES3_VULKAN().enable(Feature::ForceFallbackFormat),
-    ES3_VULKAN().enable(Feature::PreferDrawClearOverVkCmdClearAttachments),
-    ES2_WEBGPU());
+    ES3_VULKAN().enable(Feature::PreferDrawClearOverVkCmdClearAttachments));
 
 GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ClearTestES3);
 ANGLE_INSTANTIATE_TEST_ES3_AND(
@@ -6522,7 +6542,18 @@ GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ClearTestRGB_ES3);
 ANGLE_INSTANTIATE_TEST(ClearTestRGB_ES3, ES3_D3D11(), ES3_VULKAN(), ES3_METAL());
 
 ANGLE_INSTANTIATE_TEST_ES3(ClearTextureEXTTest);
-ANGLE_INSTANTIATE_TEST_ES31(ClearTextureEXTTestES31Renderable);
-ANGLE_INSTANTIATE_TEST_ES31(ClearTextureEXTTestES31Unrenderable);
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ClearTextureEXTTestES31Renderable);
+ANGLE_INSTANTIATE_TEST_COMBINE_1(ClearTextureEXTTestES31Renderable,
+                                 ClearTextureVariationsTestPrint,
+                                 testing::ValuesIn(kClearTextureRenderableFormats),
+                                 ANGLE_ALL_TEST_PLATFORMS_ES31,
+                                 ES31_VULKAN_SWIFTSHADER().enable(Feature::PreferBGR565ToRGB565));
+
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(ClearTextureEXTTestES31Unrenderable);
+ANGLE_INSTANTIATE_TEST_COMBINE_1(ClearTextureEXTTestES31Unrenderable,
+                                 ClearTextureVariationsTestPrint,
+                                 testing::ValuesIn(kClearTextureUnrenderableFormats),
+                                 ANGLE_ALL_TEST_PLATFORMS_ES31);
 
 }  // anonymous namespace

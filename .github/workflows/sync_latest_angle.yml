@@ -1,0 +1,23 @@
+name: Sync latest ANGLE
+on:
+  workflow_dispatch:
+jobs:
+  Sync_latest_ANGLE:
+    runs-on: macos-latest
+    steps:
+    - name: Checkout repository
+      uses: actions/checkout@v5
+      with:
+        fetch-depth: 0
+        
+    - name: Configure Git user
+      run: |
+        git config user.name "github-actions[bot]"
+        git config user.email "github-actions[bot]@users.noreply.github.com"
+        
+    - name: Sync latest ANGLE
+      run: |
+        git remote add upstream https://github.com/google/angle.git
+        git fetch upstream main
+        git merge upstream/main -m "Merge remote-tracking branch 'upstream/main' into metal-freeze"
+        git push

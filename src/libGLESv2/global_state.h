@@ -9,6 +9,10 @@
 #ifndef LIBGLESV2_GLOBALSTATE_H_
 #define LIBGLESV2_GLOBALSTATE_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/Context.h"
 #include "libANGLE/Debug.h"
 #include "libANGLE/Display.h"
@@ -149,8 +153,7 @@ ANGLE_INLINE Context *GetValidGlobalContext()
 }
 
 // Generate a context lost error on the context if it is non-null and lost.
-void GenerateContextLostErrorOnContext(Context *context);
-void GenerateContextLostErrorOnCurrentGlobalContext();
+void GenerateContextLostErrorOnCurrentGlobalContext(angle::EntryPoint entryPoint);
 
 #if defined(ANGLE_FORCE_CONTEXT_CHECK_EVERY_CALL)
 // TODO(b/177574181): This should be handled in a backend-specific way.

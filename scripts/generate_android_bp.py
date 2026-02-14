@@ -84,7 +84,7 @@ def write_blueprint_key_value(output, name, value, indent=1):
     if isinstance(value, set) or isinstance(value, list):
         value = list(sorted(set(value)))
         if name == 'cflags':
-            fix_fortify_source_cflags(value)
+            fix_platform_default_defines(value)
 
     if isinstance(value, list):
         output.append(tabs(indent) + '%s: [' % name)
@@ -440,6 +440,7 @@ def library_target_to_blueprint(target, build_info):
         if target in ROOT_TARGETS:
             bp['defaults'].append('angle_vendor_cc_defaults')
             bp['defaults'].append('angle_dma_buf_cc_defaults')
+            bp['afdo'] = True
         bps_for_abis[abi] = bp
 
     common_bp = merge_bps(bps_for_abis)
@@ -458,6 +459,19 @@ def gn_action_args_to_blueprint_args(blueprint_inputs, blueprint_outputs, args):
         ('gen/', ''),
     ]
 
+    # some args have special prefix added in front of the file name, we need to
+    # take them out before transforming the file path, and then add them back:
+    # e.g.
+    # transform
+    # --extinst=,../../third_party/spirv-headers/src/include/spirv/unified1/extinst.debuginfo.grammar.json
+    # to
+    # --extinst=,$(location third_party/spirv-headers/src/include/spirv/unified1/extinst.debuginfo.grammar.json)
+    special_prefixs = [
+        '--extinst=,',
+        '--extinst=SHDEBUG100_,',
+        '--extinst=CLDEBUG100_,',
+    ]
+
     result_args = []
     for arg in args:
         # Attempt to find if this arg is a path to one of the inputs. If it is, use the blueprint
@@ -466,12 +480,23 @@ def gn_action_args_to_blueprint_args(blueprint_inputs, blueprint_outputs, args):
         remapped_path_arg = arg
         for (remap_source, remap_dest) in remap_folders:
             remapped_path_arg = remapped_path_arg.replace(remap_source, remap_dest)
+        special_prefix = ''
+        for special_item in special_prefixs:
+            if remapped_path_arg.startswith(special_item):
+                special_prefix = special_item
+                break
+        if special_prefix != '':
+            remapped_path_arg = remapped_path_arg[len(special_prefix):]
 
         if remapped_path_arg in blueprint_inputs or remapped_path_arg in blueprint_outputs:
-            result_args.append('$(location %s)' % remapped_path_arg)
+            remapped_path_arg = remapped_path_arg
+            result_args.append('%s$(location %s)' % (special_prefix, remapped_path_arg))
         elif os.path.basename(remapped_path_arg) in blueprint_outputs:
-            result_args.append('$(location %s)' % os.path.basename(remapped_path_arg))
+            remapped_path_arg = remapped_path_arg
+            result_args.append('%s$(location %s)' %
+                               (special_prefix, os.path.basename(remapped_path_arg)))
         else:
+            remapped_path_arg = special_prefix + remapped_path_arg
             result_args.append(remapped_path_arg)
 
     return result_args
@@ -493,6 +518,19 @@ outputs_remap = {
 
 def is_input_in_tool_files(tool_files, input):
     return input in tool_files
+
+
+def separate_py_files_from_bp_srcs_entry(input_list):
+    bp_tools_list = []  # Initialize the new list for ".py" items
+    remaining_gn_input_list = []  # Initialize the list for the items that are not ".py"
+
+    for item in input_list:
+        if item.endswith(".py"):
+            bp_tools_list.append(item)
+        else:
+            remaining_gn_input_list.append(item)
+
+    return remaining_gn_input_list, bp_tools_list
 
 
 # special handling the {{response_file_name}} args in GN:
@@ -543,7 +581,15 @@ def action_target_to_blueprint(abi, target, build_info):
             if not is_input_in_tool_files(target_info['script'], input)
         ]
 
-    bp_srcs = gn_paths_to_blueprint_paths(gn_inputs)
+    # Take "*.py" out from gn_inputs, they need to be listed in tool_files entry
+    # in Android.bp.
+    gn_inputs_without_python_script = gn_inputs
+    extra_tool_files = []
+    if 'script' in target_info:
+        gn_inputs_without_python_script, extra_tool_files = separate_py_files_from_bp_srcs_entry(
+            gn_inputs)
+
+    bp_srcs = gn_paths_to_blueprint_paths(gn_inputs_without_python_script)
 
     bp['srcs'] = bp_srcs
 
@@ -559,6 +605,17 @@ def action_target_to_blueprint(abi, target, build_info):
     bp['out'] = bp_outputs
 
     bp['tool_files'] = [gn_path_to_blueprint_path(target_info['script'])]
+    if 'script' in target_info:
+        # if there are more than 1 python script listed in "tool_files" entry in
+        # Android.bp action target, we need to specify which script we are
+        # invoking.
+        if len(extra_tool_files) > 0:
+            location = '$(location ' + target_info['script'].lstrip('/') + ')'
+        else:
+            location = '$(location)'
+        bp['tool_files'] += gn_paths_to_blueprint_paths(extra_tool_files)
+    else:
+        location = '$(location)'
 
     new_temporary_gn_response_file, updated_args = handle_gn_build_arg_response_file_name(
         target_info['args'])
@@ -566,11 +623,11 @@ def action_target_to_blueprint(abi, target, build_info):
     if new_temporary_gn_response_file:
         # add the command 'echo $(in) > $(genDir)/gn_response_file' to
         # write $response_file_contents into the new_temporary_gn_response_file.
-        cmd = ['echo $(in) >', new_temporary_gn_response_file, '&&', '$(location)'
+        cmd = ['echo $(in) >', new_temporary_gn_response_file, '&&', location
               ] + gn_action_args_to_blueprint_args(bp_srcs, bp_outputs, updated_args)
     else:
-        cmd = ['$(location)'] + gn_action_args_to_blueprint_args(bp_srcs, bp_outputs,
-                                                                 target_info['args'])
+        cmd = [location] + gn_action_args_to_blueprint_args(bp_srcs, bp_outputs,
+                                                            target_info['args'])
 
     bp['cmd'] = ' '.join(cmd)
 
@@ -736,20 +793,30 @@ def handle_angle_non_conformant_extensions_and_versions(
             bp['defaults'].append(non_conform_defaults)
 
 
-def fix_fortify_source_cflags(cflags):
-    # search if there is any cflag starts with '-D_FORTIFY_SOURCE'
-    d_fortify_source_flag = [cflag for cflag in cflags if '-D_FORTIFY_SOURCE' in cflag]
-    # Insert -U_FORTIFY_SOURCE before the first -D_FORTIFY_SOURCE flag.
-    # In case a default mode for FORTIFY_SOURCE is predefined for a compiler,
-    # and the -D_FORTIFY_SOURCE mode we set is different from the default mode,
-    # the compiler will warn about "redefining FORTIFY_SOURCE macro".
-    # To fix this compiler warning, we unset the default mode with
-    # -U_FORTIFY_SOURCE before setting the desired FORTIFY_SOURCE mode in our
-    # cflags.
-    # reference:
-    # https://best.openssf.org/Compiler-Hardening-Guides/Compiler-Options-Hardening-Guide-for-C-and-C++#tldr-what-compiler-options-should-i-use
-    if d_fortify_source_flag:
-        cflags.insert(cflags.index(d_fortify_source_flag[0]), '-U_FORTIFY_SOURCE')
+def fix_platform_default_defines(cflags: list[str]) -> None:
+    """Avoids macro redefinition errors for flags specified by Android.
+
+    Android may specify platform defaults for macros like `_FORTIFY_SOURCE` and
+    `_LIBCPP_HARDENING_MODE`. If both Android and Angle provide different values
+    for these (e.g., `-D_FORTIFY_SOURCE=3 -D_FORTIFY_SOURCE=2`), Clang will emit
+    errors about macro redefinitions.
+
+    This inserts `-U${FLAG}` before Angle's definitions, to avoid those errors.
+    """
+    flags_to_check = (
+        '_FORTIFY_SOURCE',
+        '_LIBCPP_HARDENING_MODE',
+    )
+    for flag in flags_to_check:
+        d_flag = f'-D{flag}'
+
+        # It's _technically_ possible that we have multiple instances of these
+        # flags in a single command. If these flags _differ_ in value, they
+        # should already be a build error, so we only need to worry about adding
+        # the `-U` flag before the first.
+        flag_index = next((i for i, cflag in enumerate(cflags) if d_flag in cflag), None)
+        if flag_index is not None:
+            cflags.insert(flag_index, f'-U{flag}')
 
 
 def main():
@@ -782,8 +849,6 @@ def main():
         {
             'name':
                 'angle_common_library_cflags',
-            'cpp_std':
-                'gnu++17',  # TODO(b/330910097): std::popcount missing from external/libcxx
             'cflags': [
                 # Chrome and Android use different versions of Clang which support differnt warning options.
                 # Ignore errors about unrecognized warning flags.
@@ -844,14 +909,9 @@ def main():
             'src/third_party/libXNVCtrl/LICENSE',
             'src/third_party/volk/LICENSE.md',
             'third_party/abseil-cpp/LICENSE',
-            'third_party/android_system_sdk/LICENSE',
-            'third_party/bazel/LICENSE',
-            'third_party/colorama/LICENSE',
-            'third_party/proguard/LICENSE',
-            'third_party/r8/LICENSE',
-            'third_party/turbine/LICENSE',
             'third_party/glslang/LICENSE',
             'third_party/glslang/src/LICENSE.txt',
+            'third_party/re2/LICENSE',
             'third_party/spirv-headers/LICENSE',
             'third_party/spirv-headers/src/LICENSE',
             'third_party/spirv-tools/LICENSE',

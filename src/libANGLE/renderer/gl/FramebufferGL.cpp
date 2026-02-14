@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 // FramebufferGL.cpp: Implements the class methods for FramebufferGL.
 
 #include "libANGLE/renderer/gl/FramebufferGL.h"
@@ -93,6 +97,9 @@ void BindFramebufferAttachment(const FunctionsGL *functions,
             {
                 if (attachment->isRenderToTexture())
                 {
+                    // GL_OVR_multiview_multisampled_render_to_texture is not supported on GL
+                    // backend
+                    ASSERT(!attachment->isMultiview());
                     if (functions->framebufferTexture2DMultisampleEXT)
                     {
                         functions->framebufferTexture2DMultisampleEXT(
@@ -139,6 +146,9 @@ void BindFramebufferAttachment(const FunctionsGL *functions,
             {
                 if (attachment->isMultiview())
                 {
+                    // GL_OVR_multiview_multisampled_render_to_texture is not supported on GL
+                    // backend
+                    ASSERT(!attachment->isRenderToTexture());
                     ASSERT(functions->framebufferTexture);
                     functions->framebufferTexture(GL_FRAMEBUFFER, attachmentPoint,
                                                   textureGL->getTextureID(),
@@ -208,6 +218,8 @@ bool RequiresMultiviewClear(const FramebufferState &state, bool scissorTestEnabl
             {
                 return false;
             }
+            // GL_OVR_multiview_multisampled_render_to_texture is not supported on GL backend
+            ASSERT(!colorAttachment.isRenderToTexture());
             attachment = &colorAttachment;
             allTextureArraysAreFullyAttached =
                 allTextureArraysAreFullyAttached && AreAllLayersActive(*attachment);
@@ -221,6 +233,8 @@ bool RequiresMultiviewClear(const FramebufferState &state, bool scissorTestEnabl
         {
             return false;
         }
+        // GL_OVR_multiview_multisampled_render_to_texture is not supported on GL backend
+        ASSERT(!depthAttachment->isRenderToTexture());
         attachment = depthAttachment;
         allTextureArraysAreFullyAttached =
             allTextureArraysAreFullyAttached && AreAllLayersActive(*attachment);
@@ -232,6 +246,8 @@ bool RequiresMultiviewClear(const FramebufferState &state, bool scissorTestEnabl
         {
             return false;
         }
+        // GL_OVR_multiview_multisampled_render_to_texture is not supported on GL backend
+        ASSERT(!stencilAttachment->isRenderToTexture());
         attachment = stencilAttachment;
         allTextureArraysAreFullyAttached =
             allTextureArraysAreFullyAttached && AreAllLayersActive(*attachment);

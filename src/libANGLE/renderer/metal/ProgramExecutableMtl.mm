@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 // ProgramExecutableMtl.cpp: Implementation of ProgramExecutableMtl.
+//
+
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
 
 #include "libANGLE/renderer/metal/ProgramExecutableMtl.h"
 
@@ -126,7 +131,7 @@ inline void copy_matrix_row_major(void *dst,
         }
     }
 }
-// TODO(angleproject:7979) Upgrade ANGLE Uniform buffer remapper to compute shaders
+// TODO(http://anglebug.com/42266442) Upgrade ANGLE Uniform buffer remapper to compute shaders
 angle::Result ConvertUniformBufferData(ContextMtl *contextMtl,
                                        const UBOConversionInfo &blockConversionInfo,
                                        mtl::BufferPool *dynamicBuffer,
@@ -352,9 +357,7 @@ angle::Result CreateMslShaderLib(mtl::Context *context,
 
         // Convert to actual binary shader
         angle::ObjCPtr<NSError> err;
-        const bool disableFastMath =
-            context->getDisplay()->getFeatures().intelDisableFastMath.enabled ||
-            translatedMslInfo->hasIsnanOrIsinf;
+        const bool disableFastMath      = translatedMslInfo->hasIsnanOrIsinf;
         const bool usesInvariance       = translatedMslInfo->hasInvariant;
         translatedMslInfo->metalLibrary = libraryCache.getOrCompileShaderLibrary(
             context->getDisplay(), translatedMslInfo->metalShaderSource, substitutionMacros,
@@ -785,7 +788,7 @@ angle::Result ProgramExecutableMtl::resizeDefaultUniformBlocksMemory(
     return angle::Result::Continue;
 }
 
-// TODO(angleproject:7979) Upgrade ANGLE Uniform buffer remapper to compute shaders
+// TODO(http://anglebug.com/42266442) Upgrade ANGLE Uniform buffer remapper to compute shaders
 void ProgramExecutableMtl::initUniformBlocksRemapper(const gl::SharedCompiledShaderState &shader)
 {
     std::unordered_map<std::string, UBOConversionInfo> conversionMap;

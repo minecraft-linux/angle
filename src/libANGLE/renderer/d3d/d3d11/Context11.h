@@ -49,7 +49,8 @@ class Context11 : public ContextD3D, public MultisampleTextureInitializer
     BufferImpl *createBuffer(const gl::BufferState &state) override;
 
     // Vertex Array creation
-    VertexArrayImpl *createVertexArray(const gl::VertexArrayState &data) override;
+    VertexArrayImpl *createVertexArray(const gl::VertexArrayState &data,
+                                       const gl::VertexArrayBuffers &vertexArrayBuffers) override;
 
     // Query and Fence creation
     QueryImpl *createQuery(gl::QueryType type) override;
@@ -254,7 +255,6 @@ class Context11 : public ContextD3D, public MultisampleTextureInitializer
 
     angle::Result triggerDrawCallProgramRecompilation(const gl::Context *context,
                                                       gl::PrimitiveMode drawMode);
-    angle::Result triggerDispatchCallProgramRecompilation(const gl::Context *context);
     angle::Result getIncompleteTexture(const gl::Context *context,
                                        gl::TextureType type,
                                        gl::Texture **textureOut);

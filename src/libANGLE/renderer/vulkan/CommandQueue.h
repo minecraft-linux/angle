@@ -20,6 +20,7 @@
 #include "common/vulkan/vk_headers.h"
 #include "libANGLE/renderer/vulkan/PersistentCommandPool.h"
 #include "libANGLE/renderer/vulkan/vk_helpers.h"
+#include "vulkan/vulkan_core.h"
 
 namespace rx
 {
@@ -87,7 +88,7 @@ class CommandBatch final : angle::NonCopyable
     CommandBatch &operator=(CommandBatch &&other);
 
     void destroy(VkDevice device);
-    angle::Result release(ErrorContext *context);
+    angle::Result release(ErrorContext *context, WhenToResetCommandBuffer whenToReset);
 
     void setQueueSerial(const QueueSerial &serial);
     void setProtectionType(ProtectionType protectionType);
@@ -101,6 +102,8 @@ class CommandBatch final : angle::NonCopyable
     const PrimaryCommandBuffer &getPrimaryCommands() const;
     const SharedExternalFence &getExternalFence();
 
+    // Accessing the shared fence is prioritized before the shared external fence, since the shared
+    // fence may be used in an extra empty submission after the external fence (via a feature flag).
     bool hasFence() const;
     VkFence getFenceHandle() const;
     VkResult getFenceStatus(VkDevice device) const;
@@ -129,8 +132,9 @@ class QueueFamily final : angle::NonCopyable
     static const uint32_t kInvalidIndex = std::numeric_limits<uint32_t>::max();
 
     static uint32_t FindIndex(const std::vector<VkQueueFamilyProperties> &queueFamilyProperties,
-                              VkQueueFlags flags,
-                              int32_t matchNumber,  // 0 = first match, 1 = second match ...
+                              VkQueueFlags includeFlags,
+                              VkQueueFlags optionalFlags,
+                              VkQueueFlags excludeFlags,
                               uint32_t *matchCount);
     static const uint32_t kQueueCount = static_cast<uint32_t>(egl::ContextPriority::EnumCount);
     static const float kQueuePriorities[static_cast<uint32_t>(egl::ContextPriority::EnumCount)];
@@ -202,6 +206,93 @@ class DeviceQueueMap final
     angle::PackedEnumMap<egl::ContextPriority, QueueAndIndex> mQueueAndIndices;
 };
 
+class CommandsState : angle::NonCopyable
+{
+  public:
+    CommandsState(Renderer *renderer,
+                  ProtectionType protectionType,
+                  egl::ContextPriority contextPriority);
+    ~CommandsState();
+
+    void destroy(VkDevice device);
+
+    angle::Result flushOutsideRPCommands(Context *context,
+                                         OutsideRenderPassCommandBufferHelper **outsideRPCommands)
+    {
+        ANGLE_TRACE_EVENT0("gpu.angle", "CommandsState::flushOutsideRPCommands");
+        std::lock_guard<angle::SimpleMutex> lock(mCmdPoolMutex);
+        ANGLE_TRY(ensurePrimaryCommandBufferValidLocked(context));
+        ANGLE_TRY((*outsideRPCommands)->flushToPrimary(context, this, &mPrimaryCommands));
+        // Restart the command buffer.
+        return (*outsideRPCommands)->reset(context, &mSecondaryCommands);
+    }
+
+    angle::Result flushRenderPassCommands(Context *context,
+                                          const RenderPass &renderPass,
+                                          VkFramebuffer framebufferOverride,
+                                          RenderPassCommandBufferHelper **renderPassCommands)
+    {
+        ANGLE_TRACE_EVENT0("gpu.angle", "CommandsState::flushRenderPassCommands");
+        std::lock_guard<angle::SimpleMutex> lock(mCmdPoolMutex);
+        ANGLE_TRY(ensurePrimaryCommandBufferValidLocked(context));
+        ANGLE_TRY((*renderPassCommands)
+                      ->flushToPrimary(context, this, &mPrimaryCommands, renderPass,
+                                       framebufferOverride));
+        // Restart the command buffer.
+        return (*renderPassCommands)->reset(context, &mSecondaryCommands);
+    }
+
+    void flushImagesTransitionToForeign(
+        std::vector<VkImageMemoryBarrier> &&imagesToTransitionToForeign)
+    {
+        std::lock_guard<angle::SimpleMutex> lock(mCmdPoolMutex);
+        // If we have foreign images to transit, we must have already issued some barrier, which
+        // means command buffer can't be empty.
+        ASSERT(mPrimaryCommands.valid());
+
+        mPrimaryCommands.pipelineBarrier(
+            VK_PIPELINE_STAGE_ALL_COMMANDS_BIT, VK_PIPELINE_STAGE_TOP_OF_PIPE_BIT, 0, 0, nullptr, 0,
+            nullptr, static_cast<uint32_t>(imagesToTransitionToForeign.size()),
+            imagesToTransitionToForeign.data());
+        imagesToTransitionToForeign.clear();
+    }
+
+    angle::Result getCommandsAndWaitSemaphores(
+        ErrorContext *context,
+        CommandPoolAccess *commandPoolAccess,
+        CommandBatch *batch,
+        std::vector<VkSemaphore> *waitSemaphoresOut,
+        std::vector<VkPipelineStageFlags> *waitSemaphoreStageMasksOut);
+
+    void addWaitSemaphore(VkSemaphore waitSemaphores, VkPipelineStageFlags waitSemaphoreStageMasks)
+    {
+        mWaitSemaphores.emplace_back(waitSemaphores);
+        mWaitSemaphoreStageMasks.emplace_back(waitSemaphoreStageMasks);
+    }
+
+    bool hasWaitSemaphoresPendingSubmission() const { return !mWaitSemaphores.empty(); }
+
+    void setPriority(egl::ContextPriority newPriority) { mPriority = newPriority; }
+    egl::ContextPriority getPriority() const { return mPriority; }
+    ProtectionType getProtectionType() const { return mProtectionType; }
+
+    angle::Result insertSubmitDebugMarker(ErrorContext *context, QueueSubmitReason reason);
+
+  private:
+    angle::Result ensurePrimaryCommandBufferValidLocked(ErrorContext *context);
+
+    // Command pool mutex lock shared with CommandPoolAccess
+    angle::SimpleMutex &mCmdPoolMutex;
+    // This is immutable
+    const vk::ProtectionType mProtectionType;
+    egl::ContextPriority mPriority;
+
+    std::vector<VkSemaphore> mWaitSemaphores;
+    std::vector<VkPipelineStageFlags> mWaitSemaphoreStageMasks;
+    PrimaryCommandBuffer mPrimaryCommands;
+    SecondaryCommandBufferCollector mSecondaryCommands;
+};
+
 class CommandPoolAccess : angle::NonCopyable
 {
   public:
@@ -214,49 +305,15 @@ class CommandPoolAccess : angle::NonCopyable
     void destroyPrimaryCommandBuffer(VkDevice device, PrimaryCommandBuffer *primaryCommands) const;
     angle::Result collectPrimaryCommandBuffer(ErrorContext *context,
                                               const ProtectionType protectionType,
-                                              PrimaryCommandBuffer *primaryCommands);
-    angle::Result flushOutsideRPCommands(Context *context,
-                                         ProtectionType protectionType,
-                                         egl::ContextPriority priority,
-                                         OutsideRenderPassCommandBufferHelper **outsideRPCommands);
-    angle::Result flushRenderPassCommands(Context *context,
-                                          const ProtectionType &protectionType,
-                                          const egl::ContextPriority &priority,
-                                          const RenderPass &renderPass,
-                                          VkFramebuffer framebufferOverride,
-                                          RenderPassCommandBufferHelper **renderPassCommands);
-
-    void flushWaitSemaphores(ProtectionType protectionType,
-                             egl::ContextPriority priority,
-                             std::vector<VkSemaphore> &&waitSemaphores,
-                             std::vector<VkPipelineStageFlags> &&waitSemaphoreStageMasks);
-
-    angle::Result getCommandsAndWaitSemaphores(
-        ErrorContext *context,
-        ProtectionType protectionType,
-        egl::ContextPriority priority,
-        CommandBatch *batchOut,
-        std::vector<VkImageMemoryBarrier> &&imagesToTransitionToForeign,
-        std::vector<VkSemaphore> *waitSemaphoresOut,
-        std::vector<VkPipelineStageFlags> *waitSemaphoreStageMasksOut);
+                                              PrimaryCommandBuffer *primaryCommands,
+                                              WhenToResetCommandBuffer whenToReset);
 
   private:
-    angle::Result ensurePrimaryCommandBufferValidLocked(ErrorContext *context,
-                                                        const ProtectionType &protectionType,
-                                                        const egl::ContextPriority &priority)
+    angle::Result allocatePrimaryCommandBufferLocked(ErrorContext *context,
+                                                     const ProtectionType &protectionType,
+                                                     PrimaryCommandBuffer *primaryCommandsOut)
     {
-        CommandsState &state = mCommandsStateMap[priority][protectionType];
-        if (state.primaryCommands.valid())
-        {
-            return angle::Result::Continue;
-        }
-        ANGLE_TRY(mPrimaryCommandPoolMap[protectionType].allocate(context, &state.primaryCommands));
-        VkCommandBufferBeginInfo beginInfo = {};
-        beginInfo.sType                    = VK_STRUCTURE_TYPE_COMMAND_BUFFER_BEGIN_INFO;
-        beginInfo.flags                    = VK_COMMAND_BUFFER_USAGE_ONE_TIME_SUBMIT_BIT;
-        beginInfo.pInheritanceInfo         = nullptr;
-        ANGLE_VK_TRY(context, state.primaryCommands.begin(beginInfo));
-        return angle::Result::Continue;
+        return mPrimaryCommandPoolMap[protectionType].allocate(context, primaryCommandsOut);
     }
 
     // This mutex ensures vulkan command pool is externally synchronized.
@@ -266,14 +323,10 @@ class CommandPoolAccess : angle::NonCopyable
     // 1) recording commands on any command buffers allocated from the same command pool
     // 2) allocate, free, reset command buffers from the same command pool.
     // 3) any operations on the command pool itself
+    friend class CommandsState;
     mutable angle::SimpleMutex mCmdPoolMutex;
 
     using PrimaryCommandPoolMap = angle::PackedEnumMap<ProtectionType, PersistentCommandPool>;
-    using CommandsStateMap =
-        angle::PackedEnumMap<egl::ContextPriority,
-                             angle::PackedEnumMap<ProtectionType, CommandsState>>;
-
-    CommandsStateMap mCommandsStateMap;
     // Keeps a free list of reusable primary command buffers.
     PrimaryCommandPoolMap mPrimaryCommandPoolMap;
 };
@@ -349,12 +402,10 @@ class CommandQueue : angle::NonCopyable
     bool isBusy(Renderer *renderer) const;
 
     angle::Result submitCommands(ErrorContext *context,
-                                 ProtectionType protectionType,
-                                 egl::ContextPriority priority,
                                  VkSemaphore signalSemaphore,
                                  SharedExternalFence &&externalFence,
-                                 std::vector<VkImageMemoryBarrier> &&imagesToTransitionToForeign,
-                                 const QueueSerial &submitQueueSerial);
+                                 const QueueSerial &submitQueueSerial,
+                                 CommandsState &&commandsState);
 
     angle::Result queueSubmitOneOff(ErrorContext *context,
                                     ProtectionType protectionType,
@@ -388,36 +439,7 @@ class CommandQueue : angle::NonCopyable
         return angle::Result::Continue;
     }
 
-    ANGLE_INLINE void flushWaitSemaphores(
-        ProtectionType protectionType,
-        egl::ContextPriority priority,
-        std::vector<VkSemaphore> &&waitSemaphores,
-        std::vector<VkPipelineStageFlags> &&waitSemaphoreStageMasks)
-    {
-        return mCommandPoolAccess.flushWaitSemaphores(protectionType, priority,
-                                                      std::move(waitSemaphores),
-                                                      std::move(waitSemaphoreStageMasks));
-    }
-    ANGLE_INLINE angle::Result flushOutsideRPCommands(
-        Context *context,
-        ProtectionType protectionType,
-        egl::ContextPriority priority,
-        OutsideRenderPassCommandBufferHelper **outsideRPCommands)
-    {
-        return mCommandPoolAccess.flushOutsideRPCommands(context, protectionType, priority,
-                                                         outsideRPCommands);
-    }
-    ANGLE_INLINE angle::Result flushRenderPassCommands(
-        Context *context,
-        ProtectionType protectionType,
-        const egl::ContextPriority &priority,
-        const RenderPass &renderPass,
-        VkFramebuffer framebufferOverride,
-        RenderPassCommandBufferHelper **renderPassCommands)
-    {
-        return mCommandPoolAccess.flushRenderPassCommands(
-            context, protectionType, priority, renderPass, framebufferOverride, renderPassCommands);
-    }
+    CommandPoolAccess &getCommandPoolAccess() { return mCommandPoolAccess; }
 
     const angle::VulkanPerfCounters getPerfCounters() const;
     void resetPerFramePerfCounters();
@@ -425,12 +447,15 @@ class CommandQueue : angle::NonCopyable
     // Release finished commands and clean up garbage immediately, or request async clean up if
     // enabled.
     angle::Result releaseFinishedCommandsAndCleanupGarbage(ErrorContext *context);
-    angle::Result releaseFinishedCommands(ErrorContext *context)
+    angle::Result releaseFinishedCommands(ErrorContext *context,
+                                          WhenToResetCommandBuffer whenToReset)
     {
         std::lock_guard<angle::SimpleMutex> lock(mCmdReleaseMutex);
-        return releaseFinishedCommandsLocked(context);
+        return releaseFinishedCommandsLocked(context, whenToReset);
     }
     angle::Result postSubmitCheck(ErrorContext *context);
+
+    bool isInFlightCommandsEmpty() const;
 
     // Try to cleanup garbage and return if something was cleaned.  Otherwise, wait for the
     // mInFlightCommands and retry.
@@ -449,7 +474,8 @@ class CommandQueue : angle::NonCopyable
                                         std::unique_lock<angle::SimpleMutex> *lock);
     void onCommandBatchFinishedLocked(CommandBatch &&batch);
     // Walk mFinishedCommands, reset and recycle all command buffers.
-    angle::Result releaseFinishedCommandsLocked(ErrorContext *context);
+    angle::Result releaseFinishedCommandsLocked(ErrorContext *context,
+                                                WhenToResetCommandBuffer whenToReset);
     // Walk mInFlightCommands, check and update mLastCompletedSerials for all commands that are
     // finished
     angle::Result checkCompletedCommandsLocked(ErrorContext *context);
@@ -500,6 +526,11 @@ class CommandQueue : angle::NonCopyable
 
     angle::VulkanPerfCounters mPerfCounters;
 };
+
+ANGLE_INLINE bool CommandQueue::isInFlightCommandsEmpty() const
+{
+    return mInFlightCommands.empty();
+}
 
 // A helper thread used to clean up garbage
 class CleanUpThread : public ErrorContext
@@ -577,8 +608,8 @@ class [[nodiscard]] ScopedPrimaryCommandBuffer final
 
     DeviceScoped<PrimaryCommandBuffer> unlockAndRelease()
     {
-        ASSERT(mCommandBuffer.get().valid() && mPoolLock.owns_lock() ||
-               !mCommandBuffer.get().valid() && mPoolLock.mutex() == nullptr);
+        ASSERT((mCommandBuffer.get().valid() && mPoolLock.owns_lock()) ||
+               (!mCommandBuffer.get().valid() && mPoolLock.mutex() == nullptr));
         mPoolLock = {};
         return std::move(mCommandBuffer);
     }

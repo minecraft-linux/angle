@@ -90,7 +90,7 @@ class TOutputGLSLBase : public TIntermTraverser
     const char *mapQualifierToString(TQualifier qualifier);
 
     sh::GLenum getShaderType() const { return mShaderType; }
-    bool isHighPrecisionSupported() const { return mHighPrecisionSupported; }
+    int getShaderVersion() const { return mShaderVersion; }
     const char *getIndentPrefix(int extraIndentDepth = 0);
 
     bool needsToWriteLayoutQualifier(const TType &type);
@@ -105,16 +105,16 @@ class TOutputGLSLBase : public TIntermTraverser
 
     TInfoSinkBase &mObjSink;
     bool mDeclaringVariable;
+    bool mSkippedDeclaringAnonymousStruct;
 
     // name hashing.
     ShHashFunction64 mHashFunction;
+    char mUserVariablePrefix;
     NameMap &mNameMap;
 
     sh::GLenum mShaderType;
     const int mShaderVersion;
     ShShaderOutput mOutput;
-
-    bool mHighPrecisionSupported;
 
     // Emit "layout(locaton = 0)" for fragment outputs whose location is unspecified. This is for
     // transformations like pixel local storage, where new outputs are introduced to the shader, and

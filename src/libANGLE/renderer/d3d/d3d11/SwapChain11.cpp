@@ -6,6 +6,10 @@
 
 // SwapChain11.cpp: Implements a back-end specific class for the D3D11 swap chain.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d11/SwapChain11.h"
 
 #include <EGL/eglext.h>
@@ -650,10 +654,7 @@ EGLint SwapChain11::reset(DisplayD3D *displayD3D,
             }
         }
 
-        if (mRenderer->getRenderer11DeviceCaps().supportsDXGI1_2)
-        {
-            mSwapChain1 = d3d11::DynamicCastComObject<IDXGISwapChain1>(mSwapChain);
-        }
+        mSwapChain1 = d3d11::DynamicCastComObject<IDXGISwapChain1>(mSwapChain);
 
         ID3D11Texture2D *backbufferTex = nullptr;
         hr                             = mSwapChain->GetBuffer(0, __uuidof(ID3D11Texture2D),
@@ -801,14 +802,7 @@ EGLint SwapChain11::swapRect(DisplayD3D *displayD3D,
     }
 
     EGLint result = present(displayD3D, x, y, width, height);
-    if (result != EGL_SUCCESS)
-    {
-        return result;
-    }
-
-    mRenderer->onSwap();
-
-    return EGL_SUCCESS;
+    return result;
 }
 
 EGLint SwapChain11::copyOffscreenToBackbuffer(DisplayD3D *displayD3D,

@@ -134,7 +134,7 @@ void FindUnusedInoutVariablesTraverser::visitSymbol(TIntermSymbol *node)
         // Some channels are written to
         ASSERT(mIsInMain);
         uint8_t channels = 0;
-        for (int channel : parentSwizzle->getSwizzleOffsets())
+        for (uint32_t channel : parentSwizzle->getSwizzleOffsets())
         {
             channels |= static_cast<uint8_t>(1 << channel);
         }
@@ -182,7 +182,7 @@ VariableReplacementMap FindUnusedInoutVariablesTraverser::getReplacementMap() co
         const TVariable *replacement =
             new TVariable(mSymbolTable, var->name(), newType, var->symbolType());
 
-        replacementMap[var] = new TIntermSymbol(replacement);
+        replacementMap[var->uniqueId()] = new TIntermSymbol(replacement);
     }
 
     return replacementMap;

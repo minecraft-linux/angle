@@ -56,15 +56,13 @@ class Debug : angle::NonCopyable
                        GLuint id,
                        GLenum severity,
                        const std::string &message,
-                       gl::LogSeverity logSeverity,
-                       angle::EntryPoint entryPoint) const;
+                       gl::LogSeverity logSeverity) const;
     void insertMessage(GLenum source,
                        GLenum type,
                        GLuint id,
                        GLenum severity,
                        std::string &&message,
-                       gl::LogSeverity logSeverity,
-                       angle::EntryPoint entryPoint) const;
+                       gl::LogSeverity logSeverity) const;
 
     void setMessageControl(GLenum source,
                            GLenum type,
@@ -174,17 +172,18 @@ class Debug : angle::NonCopyable
 
 namespace
 {
-ANGLE_INLINE bool PerfCounterBelowMaxRepeat(std::atomic<uint32_t> *counter, bool *isLastRepeat)
+ANGLE_INLINE bool MessageCounterBelowMaxRepeat(std::atomic<uint32_t> *counter,
+                                               uint32_t maxRepeat,
+                                               bool *isLastRepeat)
 {
-    constexpr uint32_t kMaxPerfRepeat = 4;
     // Stop incrementing the counter after max value to avoid unnecessary cache effects
-    if (counter->load(std::memory_order_relaxed) < kMaxPerfRepeat)
+    if (counter->load(std::memory_order_relaxed) < maxRepeat)
     {
         uint32_t count = counter->fetch_add(1, std::memory_order_relaxed);
         // Check not strictly necessary as worst case is an additional log, but is good practice.
-        if (count < kMaxPerfRepeat)
+        if (count < maxRepeat)
         {
-            if (count == kMaxPerfRepeat - 1)
+            if (count == maxRepeat - 1)
             {
                 *isLastRepeat = true;
             }
@@ -196,17 +195,18 @@ ANGLE_INLINE bool PerfCounterBelowMaxRepeat(std::atomic<uint32_t> *counter, bool
 }  // namespace
 
 // Generate a perf warning.  Only outputs the same message a few times to avoid spamming the logs.
-#define ANGLE_PERF_WARNING(debug, severity, ...)                              \
-    do                                                                        \
-    {                                                                         \
-        static std::atomic<uint32_t> sRepeatCount = 0;                        \
-        bool isLastRepeat                         = false;                    \
-        if (PerfCounterBelowMaxRepeat(&sRepeatCount, &isLastRepeat))          \
-        {                                                                     \
-            char ANGLE_MESSAGE[200];                                          \
-            snprintf(ANGLE_MESSAGE, sizeof(ANGLE_MESSAGE), __VA_ARGS__);      \
-            (debug).insertPerfWarning(severity, isLastRepeat, ANGLE_MESSAGE); \
-        }                                                                     \
+#define ANGLE_PERF_WARNING(debug, severity, ...)                                        \
+    do                                                                                  \
+    {                                                                                   \
+        static std::atomic<uint32_t> sRepeatCount = 0;                                  \
+        bool isLastRepeat                         = false;                              \
+        constexpr uint32_t kMaxPerfRepeat         = 4;                                  \
+        if (MessageCounterBelowMaxRepeat(&sRepeatCount, kMaxPerfRepeat, &isLastRepeat)) \
+        {                                                                               \
+            char ANGLE_MESSAGE[200];                                                    \
+            snprintf(ANGLE_MESSAGE, sizeof(ANGLE_MESSAGE), __VA_ARGS__);                \
+            (debug).insertPerfWarning(severity, isLastRepeat, ANGLE_MESSAGE);           \
+        }                                                                               \
     } while (0)
 
 #endif  // LIBANGLE_DEBUG_H_

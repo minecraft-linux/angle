@@ -9,6 +9,10 @@
 // behavior.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "compiler/translator/hlsl/TextureFunctionHLSL.h"
 
 #include "compiler/translator/ImmutableStringBuilder.h"
@@ -1534,7 +1538,7 @@ ImmutableString TextureFunctionHLSL::useTextureFunction(const ImmutableString &n
 
         bool bias = (argumentCount > mandatoryArgumentCount);  // Bias argument is optional
 
-        if (lod0 || shaderType == GL_VERTEX_SHADER || shaderType == GL_COMPUTE_SHADER)
+        if (lod0 || shaderType == GL_VERTEX_SHADER)
         {
             if (bias)
             {

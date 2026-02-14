@@ -75,17 +75,6 @@ std::shared_ptr<ShaderTranslateTask> ShaderVk::compile(const gl::Context *contex
         options->ignorePrecisionQualifiers = true;
     }
 
-    if (contextVk->getFeatures().forceFragmentShaderPrecisionHighpToMediump.enabled)
-    {
-        options->forceShaderPrecisionHighpToMediump = true;
-    }
-
-    // Let compiler use specialized constant for pre-rotation.
-    if (!contextVk->getFeatures().preferDriverUniformOverSpecConst.enabled)
-    {
-        options->useSpecializationConstant = true;
-    }
-
     if (contextVk->getFeatures().clampFragDepth.enabled)
     {
         options->clampFragDepth = true;
@@ -104,6 +93,11 @@ std::shared_ptr<ShaderTranslateTask> ShaderVk::compile(const gl::Context *contex
              contextVk->getFeatures().emulateTransformFeedback.enabled)
     {
         options->addVulkanXfbEmulationSupportCode = true;
+    }
+
+    if (contextVk->getFeatures().emulateDithering.enabled)
+    {
+        options->emulateDithering = true;
     }
 
     if (contextVk->getFeatures().roundOutputAfterDithering.enabled)
@@ -139,6 +133,17 @@ std::shared_ptr<ShaderTranslateTask> ShaderVk::compile(const gl::Context *contex
     if (contextVk->getFeatures().emulateR32fImageAtomicExchange.enabled)
     {
         options->emulateR32fImageAtomicExchange = true;
+    }
+
+    // https://issuetracker.google.com/406827038
+    // Unconditionally set this option to true for the Vulkan backend
+    options->preserveDenorms = true;
+
+    options->removeInactiveVariables = true;
+
+    if (contextVk->getFeatures().convertLowpAndMediumpFloatUniformsTo16Bits.enabled)
+    {
+        options->transformFloatUniformTo16Bits = true;
     }
 
     // The Vulkan backend needs no post-processing of the translated shader.

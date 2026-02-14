@@ -22,7 +22,7 @@ class SurfaceNULL : public SurfaceImpl
     ~SurfaceNULL() override;
 
     egl::Error initialize(const egl::Display *display) override;
-    egl::Error swap(const gl::Context *context) override;
+    egl::Error swap(const gl::Context *context, SurfaceSwapFeedback *feedback) override;
     egl::Error postSubBuffer(const gl::Context *context,
                              EGLint x,
                              EGLint y,
@@ -37,9 +37,8 @@ class SurfaceNULL : public SurfaceImpl
     egl::Error getMscRate(EGLint *numerator, EGLint *denominator) override;
     void setSwapInterval(const egl::Display *display, EGLint interval) override;
 
-    // width and height can change with client window resizing
-    EGLint getWidth() const override;
-    EGLint getHeight() const override;
+    // size can change with client window resizing
+    gl::Extents getSize() const override;
 
     EGLint isPostSubBufferSupported() const override;
     EGLint getSwapBehavior() const override;

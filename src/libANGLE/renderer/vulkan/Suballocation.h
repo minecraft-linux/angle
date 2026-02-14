@@ -10,6 +10,10 @@
 #ifndef LIBANGLE_RENDERER_VULKAN_SUBALLOCATION_H_
 #define LIBANGLE_RENDERER_VULKAN_SUBALLOCATION_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "common/SimpleMutex.h"
 #include "common/debug.h"
 #include "libANGLE/angletypes.h"
@@ -84,18 +88,6 @@ class BufferBlock final : angle::NonCopyable
     int32_t getAndIncrementEmptyCounter();
     void calculateStats(vma::StatInfo *pStatInfo) const;
 
-    void onNewDescriptorSet(const SharedDescriptorSetCacheKey &sharedCacheKey)
-    {
-        mDescriptorSetCacheManager.addKey(sharedCacheKey);
-    }
-    void releaseAllCachedDescriptorSetCacheKeys(Renderer *renderer)
-    {
-        if (!mDescriptorSetCacheManager.empty())
-        {
-            mDescriptorSetCacheManager.releaseKeys(renderer);
-        }
-    }
-
   private:
     mutable angle::SimpleMutex mVirtualBlockMutex;
     VirtualBlock mVirtualBlock;
@@ -119,8 +111,6 @@ class BufferBlock final : angle::NonCopyable
     // buffer block is found to be empty when pruneEmptyBuffer is called. This gets reset whenever
     // it becomes non-empty.
     int32_t mCountRemainsEmpty;
-    // Manages the descriptorSet cache that created with this BufferBlock.
-    DescriptorSetCacheManager mDescriptorSetCacheManager;
 };
 using BufferBlockPointer       = std::unique_ptr<BufferBlock>;
 using BufferBlockPointerVector = std::vector<BufferBlockPointer>;

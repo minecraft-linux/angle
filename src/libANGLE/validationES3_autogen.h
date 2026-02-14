@@ -18,6 +18,7 @@ namespace gl
 {
 class Context;
 class PrivateState;
+class PrivateStateCache;
 class ErrorSet;
 
 bool ValidateBeginQuery(const Context *context,
@@ -355,7 +356,8 @@ bool ValidateIsSync(const Context *context, angle::EntryPoint entryPoint, SyncID
 bool ValidateIsTransformFeedback(const Context *context,
                                  angle::EntryPoint entryPoint,
                                  TransformFeedbackID idPacked);
-bool ValidateIsVertexArray(const Context *context,
+bool ValidateIsVertexArray(const PrivateState &state,
+                           ErrorSet *errors,
                            angle::EntryPoint entryPoint,
                            VertexArrayID arrayPacked);
 bool ValidateMapBufferRange(const Context *context,
@@ -537,7 +539,8 @@ bool ValidateUniformMatrix4x3fv(const Context *context,
 bool ValidateUnmapBuffer(const Context *context,
                          angle::EntryPoint entryPoint,
                          BufferBinding targetPacked);
-bool ValidateVertexAttribDivisor(const Context *context,
+bool ValidateVertexAttribDivisor(const PrivateState &state,
+                                 ErrorSet *errors,
                                  angle::EntryPoint entryPoint,
                                  GLuint index,
                                  GLuint divisor);

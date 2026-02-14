@@ -458,6 +458,9 @@
         "textarget": "TextureTarget",
         "texture": "TextureID"
     },
+    "glFramebufferTextureMultisampleMultiview": {
+        "texture": "TextureID"
+    },
     "glFramebufferTexture3D": {
         "textarget": "TextureTarget",
         "texture": "TextureID"
@@ -1505,6 +1508,13 @@
     },
     "glShaderStorageBlockBinding": {
         "program": "ShaderProgramID"
+    },
+    "glShadingRate": {
+        "rate": "ShadingRate"
+    },
+    "glShadingRateCombinerOps": {
+        "combinerOp0": "CombinerOp",
+        "combinerOp1": "CombinerOp"
     },
     "glSignalSemaphore": {
         "buffers": "const BufferID *",

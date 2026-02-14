@@ -6,6 +6,10 @@
 
 // Framebuffer11.cpp: Implements the Framebuffer11 class.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/d3d/d3d11/Framebuffer11.h"
 
 #include "common/bitset_utils.h"
@@ -289,7 +293,10 @@ angle::Result Framebuffer11::readPixelsImpl(const gl::Context *context,
                                     pack.reverseRowOrder, packBuffer,
                                     reinterpret_cast<ptrdiff_t>(pixels));
 
-        return packBufferStorage->packPixels(context, *readAttachment, packParams);
+        BufferFeedback feedback;
+        ANGLE_TRY(packBufferStorage->packPixels(context, *readAttachment, packParams, &feedback));
+        packBuffer->applyImplFeedback(context, feedback);
+        return angle::Result::Continue;
     }
 
     return mRenderer->readFromAttachment(context, *readAttachment, area, format, type,
@@ -327,8 +334,7 @@ angle::Result Framebuffer11::blitImpl(const gl::Context *context,
             if (drawBuffer.isAttached() && drawBufferStates[colorAttachment] != GL_NONE)
             {
                 RenderTargetD3D *drawRenderTarget = nullptr;
-                ANGLE_TRY(drawBuffer.getRenderTarget(
-                    context, drawBuffer.getRenderToTextureSamples(), &drawRenderTarget));
+                ANGLE_TRY(drawBuffer.getRenderTarget(context, 0, &drawRenderTarget));
                 ASSERT(drawRenderTarget);
 
                 const bool invertColorSource   = UsePresentPathFast(mRenderer, readBuffer);
@@ -384,8 +390,7 @@ angle::Result Framebuffer11::blitImpl(const gl::Context *context,
         const gl::FramebufferAttachment *drawBuffer = mState.getDepthOrStencilAttachment();
         ASSERT(drawBuffer);
         RenderTargetD3D *drawRenderTarget = nullptr;
-        ANGLE_TRY(drawBuffer->getRenderTarget(context, drawBuffer->getRenderToTextureSamples(),
-                                              &drawRenderTarget));
+        ANGLE_TRY(drawBuffer->getRenderTarget(context, 0, &drawRenderTarget));
         ASSERT(drawRenderTarget);
 
         bool invertDest              = UsePresentPathFast(mRenderer, drawBuffer);
@@ -443,6 +448,8 @@ angle::Result Framebuffer11::getSamplePosition(const gl::Context *context,
     const gl::FramebufferAttachment *attachment = mState.getFirstNonNullAttachment();
     ASSERT(attachment);
     GLsizei sampleCount = attachment->getSamples();
+    // GL_OVR_multiview_multisampled_render_to_texture is not supported on D3D backend
+    ASSERT(!(attachment->isRenderToTexture() && attachment->isMultiview()));
 
     rx::GetSamplePosition(sampleCount, index, xy);
     return angle::Result::Continue;

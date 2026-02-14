@@ -7,6 +7,10 @@
 // angle_test_instantiate.cpp: Adds support for filtering parameterized
 // tests by platform, so we skip unsupported configs.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 #include "test_utils/angle_test_instantiate.h"
 
 #include <algorithm>
@@ -342,6 +346,11 @@ bool IsAMD()
     return HasSystemVendorID(kVendorID_AMD);
 }
 
+bool IsSamsung()
+{
+    return HasSystemVendorID(kVendorID_Samsung);
+}
+
 bool IsAppleGPU()
 {
     return HasSystemVendorID(kVendorID_Apple);
@@ -355,6 +364,11 @@ bool IsARM()
 bool IsSwiftshaderDevice()
 {
     return HasSystemDeviceID(kVendorID_GOOGLE, kDeviceID_Swiftshader);
+}
+
+bool IsLavapipeDevice()
+{
+    return HasSystemDeviceID(kVendorID_Mesa, kDeviceID_Lavapipe);
 }
 
 bool SwiftshaderTestsEnabled()
@@ -564,11 +578,9 @@ bool IsConfigAllowlisted(const SystemInfo &systemInfo, const PlatformParameters 
 
     if (IsLinux() || IsAndroid())
     {
-        // We do not support WGL bindings on Linux/Android. We do support system EGL.
+        // We do not support WGL bindings on Linux/Android.
         switch (param.driver)
         {
-            case GLESDriverType::SystemEGL:
-                return param.getRenderer() == EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE;
             case GLESDriverType::SystemWGL:
                 return false;
             case GLESDriverType::ZinkEGL:
@@ -580,11 +592,13 @@ bool IsConfigAllowlisted(const SystemInfo &systemInfo, const PlatformParameters 
 
     if (IsLinux())
     {
-        ASSERT(param.driver == GLESDriverType::AngleEGL);
+        ASSERT(param.driver == GLESDriverType::AngleEGL ||
+               param.driver == GLESDriverType::SystemEGL);
 
         // Currently we support the OpenGL, Vulkan and WebGPU back-ends on Linux.
         switch (param.getRenderer())
         {
+            case EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE:
             case EGL_PLATFORM_ANGLE_TYPE_OPENGL_ANGLE:
             case EGL_PLATFORM_ANGLE_TYPE_WEBGPU_ANGLE:
             case EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE:
@@ -596,7 +610,8 @@ bool IsConfigAllowlisted(const SystemInfo &systemInfo, const PlatformParameters 
 
     if (IsAndroid())
     {
-        ASSERT(param.driver == GLESDriverType::AngleEGL);
+        ASSERT(param.driver == GLESDriverType::AngleEGL ||
+               param.driver == GLESDriverType::SystemEGL);
 
         // Nexus Android devices don't support backing 3.2 contexts
         if (param.eglParameters.majorVersion == 3 && param.eglParameters.minorVersion == 2)
@@ -610,6 +625,7 @@ bool IsConfigAllowlisted(const SystemInfo &systemInfo, const PlatformParameters 
         // Currently we support the GLES and Vulkan back-ends on Android.
         switch (param.getRenderer())
         {
+            case EGL_PLATFORM_ANGLE_TYPE_DEFAULT_ANGLE:
             case EGL_PLATFORM_ANGLE_TYPE_OPENGLES_ANGLE:
                 return true;
             case EGL_PLATFORM_ANGLE_TYPE_VULKAN_ANGLE:

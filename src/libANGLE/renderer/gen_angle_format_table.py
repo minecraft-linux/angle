@@ -67,7 +67,10 @@ namespace angle
 
 static constexpr rx::FastCopyFunctionMap::Entry BGRAEntry = {{angle::FormatID::R8G8B8A8_UNORM,
                                                              CopyBGRA8ToRGBA8}};
+static constexpr rx::FastCopyFunctionMap::Entry RGBAEntry = {{angle::FormatID::R8G8B8A8_UNORM,
+                                                             CopyRGBA8ToRGBA8}};
 static constexpr rx::FastCopyFunctionMap BGRACopyFunctions = {{&BGRAEntry, 1}};
+static constexpr rx::FastCopyFunctionMap RGBACopyFunctions = {{&RGBAEntry, 1}};
 static constexpr rx::FastCopyFunctionMap NoCopyFunctions;
 
 const Format gFormatInfoTable[] = {{
@@ -325,6 +328,7 @@ def get_vertex_attrib_type(format_id):
     has_r16 = "R16" in format_id
     has_r32 = "R32" in format_id
     has_r10 = "R10" in format_id
+    has_r10x6 = "R10X6" in format_id
     has_vertex = "VERTEX" in format_id
 
     if has_fixed:
@@ -335,6 +339,9 @@ def get_vertex_attrib_type(format_id):
 
     if has_r8:
         return "Byte" if has_s else "UnsignedByte"
+
+    if has_r10x6:
+        return "InvalidEnum"
 
     if has_r10:
         if has_vertex:
@@ -398,6 +405,12 @@ def json_to_table_data(format_id, json, angle_to_gl):
 
     if format_id == "B8G8R8A8_UNORM":
         parsed["fastCopyFunctions"] = "BGRACopyFunctions"
+
+    if format_id == "R8G8B8A8_UNORM":
+        parsed["fastCopyFunctions"] = "RGBACopyFunctions"
+
+    if format_id == "R8G8B8A8_UNORM_SRGB":
+        parsed["fastCopyFunctions"] = "RGBACopyFunctions"
 
     is_block = format_id.endswith("_BLOCK")
 

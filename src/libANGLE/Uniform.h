@@ -7,6 +7,10 @@
 #ifndef LIBANGLE_UNIFORM_H_
 #define LIBANGLE_UNIFORM_H_
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <string>
 #include <vector>
 
@@ -122,11 +126,13 @@ struct LinkedUniform
     GLenum getType() const { return getUniformTypeInfo().type; }
     uint16_t getOuterArrayOffset() const { return pod.outerArrayOffset; }
     uint16_t getOuterArraySizeProduct() const { return pod.outerArraySizeProduct; }
+    uint16_t getBlockOffset() const { return pod.blockOffset; }
     int16_t getBinding() const { return pod.binding; }
     int16_t getOffset() const { return pod.offset; }
     int getBufferIndex() const { return pod.bufferIndex; }
     int getLocation() const { return pod.location; }
     GLenum getImageUnitFormat() const { return pod.imageUnitFormat; }
+    bool isFloat16() const { return pod.flagBits.isFloat16; }
 
     ACTIVE_VARIABLE_COMMON_INTERFACES
 
@@ -146,6 +152,8 @@ struct LinkedUniform
 
         // maxUniformVectorsCount is 4K due to we clamp maxUniformBlockSize to 64KB. All of these
         // variable should be enough to pack into 16 bits to reduce the size of mUniforms.
+        static_assert(IMPLEMENTATION_MAX_UNIFORM_BLOCK_SIZE <=
+                      std::numeric_limits<uint16_t>::max() + 1);
         int16_t binding;
         int16_t bufferIndex;
 
@@ -165,7 +173,8 @@ struct LinkedUniform
                 uint8_t isArray : 1;
                 uint8_t blockIsRowMajorMatrix : 1;
                 uint8_t isBlock : 1;
-                uint8_t padding : 3;
+                uint8_t isFloat16 : 1;
+                uint8_t padding : 2;
             } flagBits;
             uint8_t flagBitsAsUByte;
         };

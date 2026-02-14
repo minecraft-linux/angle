@@ -7,6 +7,10 @@
 //    Resource lifetime tracking in the Vulkan back-end.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_libc_calls
+#endif
+
 #include "libANGLE/renderer/vulkan/vk_resource.h"
 
 #include "libANGLE/renderer/vulkan/ContextVk.h"
@@ -18,7 +22,7 @@ namespace vk
 // Resource implementation.
 angle::Result Resource::waitForIdle(ContextVk *contextVk,
                                     const char *debugMessage,
-                                    RenderPassClosureReason reason)
+                                    QueueSubmitReason reason)
 {
     // If there are pending commands for the resource, flush them.
     if (contextVk->hasUnsubmittedUse(mUse))

@@ -183,8 +183,13 @@ Error Surface::destroyImpl(const Display *display)
     return NoError();
 }
 
-void Surface::postSwap(const gl::Context *context)
+void Surface::postSwap(const gl::Context *context, const rx::SurfaceSwapFeedback &feedback)
 {
+    if (feedback.swapChainImageChanged)
+    {
+        context->onSwapChainImageChanged();
+    }
+
     if (mRobustResourceInitialization && mState.swapBehavior != EGL_BUFFER_PRESERVED)
     {
         mColorInitState        = gl::InitState::MayNeedInit;
@@ -227,6 +232,13 @@ Error Surface::initialize(const Display *display)
     // Must happen after implementation initialize for Android.
     mState.swapBehavior = mImplementation->getSwapBehavior();
 
+    // Update render buffer based on what the impl supports.
+    if ((mType == EGL_WINDOW_BIT) && mRenderBuffer == EGL_SINGLE_BUFFER &&
+        !mImplementation->supportsSingleRenderBuffer())
+    {
+        mRenderBuffer = EGL_BACK_BUFFER;
+    }
+
     if (mBuftype == EGL_IOSURFACE_ANGLE)
     {
         GLenum internalFormat =
@@ -243,7 +255,7 @@ Error Surface::initialize(const Display *display)
     }
     if (mBuftype == EGL_D3D_TEXTURE_ANGLE)
     {
-        const angle::Format *colorFormat = mImplementation->getD3DTextureColorFormat();
+        const angle::Format *colorFormat = mImplementation->getClientBufferTextureColorFormat();
         ASSERT(colorFormat != nullptr);
         GLenum internalFormat = colorFormat->fboImplementationInternalFormat;
         mColorFormat          = gl::Format(internalFormat, colorFormat->componentType);
@@ -336,8 +348,9 @@ Error Surface::swap(gl::Context *context)
     context->getState().getOverlay()->onSwap();
 
     ANGLE_TRY(updatePropertiesOnSwap(context));
-    ANGLE_TRY(mImplementation->swap(context));
-    postSwap(context);
+
+    rx::SurfaceSwapFeedback feedback;
+    ANGLE_TRY_WITH_FINALLY(mImplementation->swap(context, &feedback), postSwap(context, feedback));
     return NoError();
 }
 
@@ -349,21 +362,10 @@ Error Surface::swapWithDamage(gl::Context *context, const EGLint *rects, EGLint 
     context->getState().getOverlay()->onSwap();
 
     ANGLE_TRY(updatePropertiesOnSwap(context));
-    ANGLE_TRY(mImplementation->swapWithDamage(context, rects, n_rects));
-    postSwap(context);
-    return NoError();
-}
 
-Error Surface::swapWithFrameToken(gl::Context *context, EGLFrameTokenANGLE frameToken)
-{
-    ANGLE_TRACE_EVENT0("gpu.angle", "egl::Surface::swapWithFrameToken");
-    context->onPreSwap();
-
-    context->getState().getOverlay()->onSwap();
-
-    ANGLE_TRY(updatePropertiesOnSwap(context));
-    ANGLE_TRY(mImplementation->swapWithFrameToken(context, frameToken));
-    postSwap(context);
+    rx::SurfaceSwapFeedback feedback;
+    ANGLE_TRY_WITH_FINALLY(mImplementation->swapWithDamage(context, rects, n_rects, &feedback),
+                           postSwap(context, feedback));
     return NoError();
 }
 
@@ -382,7 +384,8 @@ Error Surface::postSubBuffer(const gl::Context *context,
 
     ANGLE_TRY(updatePropertiesOnSwap(context));
     ANGLE_TRY(mImplementation->postSubBuffer(context, x, y, width, height));
-    postSwap(context);
+    rx::SurfaceSwapFeedback feedback;
+    postSwap(context, feedback);
     return NoError();
 }
 
@@ -530,39 +533,31 @@ EGLint Surface::isFixedSize() const
     return mFixedSize;
 }
 
-EGLint Surface::getWidth() const
+gl::Extents Surface::getSize() const
 {
-    return mFixedSize ? static_cast<EGLint>(mFixedWidth) : mImplementation->getWidth();
+    return mFixedSize
+               ? gl::Extents(static_cast<EGLint>(mFixedWidth), static_cast<EGLint>(mFixedHeight), 1)
+               : mImplementation->getSize();
 }
 
-EGLint Surface::getHeight() const
+egl::Error Surface::getUserSize(const egl::Display *display, EGLint *width, EGLint *height) const
 {
-    return mFixedSize ? static_cast<EGLint>(mFixedHeight) : mImplementation->getHeight();
-}
-
-egl::Error Surface::getUserWidth(const egl::Display *display, EGLint *value) const
-{
+    ASSERT(width != nullptr || height != nullptr);
     if (mFixedSize)
     {
-        *value = static_cast<EGLint>(mFixedWidth);
+        if (width != nullptr)
+        {
+            *width = static_cast<EGLint>(mFixedWidth);
+        }
+        if (height != nullptr)
+        {
+            *height = static_cast<EGLint>(mFixedHeight);
+        }
         return NoError();
     }
     else
     {
-        return mImplementation->getUserWidth(display, value);
-    }
-}
-
-egl::Error Surface::getUserHeight(const egl::Display *display, EGLint *value) const
-{
-    if (mFixedSize)
-    {
-        *value = static_cast<EGLint>(mFixedHeight);
-        return NoError();
-    }
-    else
-    {
-        return mImplementation->getUserHeight(display, value);
+        return mImplementation->getUserSize(display, width, height);
     }
 }
 
@@ -614,9 +609,20 @@ Error Surface::releaseTexImageFromTexture(const gl::Context *context)
     return releaseRef(context->getDisplay());
 }
 
+angle::Result Surface::ensureSizeResolved(const gl::Context *context) const
+{
+    return mImplementation->ensureSizeResolved(context);
+}
+
+bool Surface::isAttachmentSpecified(const gl::ImageIndex & /*imageIndex*/) const
+{
+    // Surface is always specified even if it has 0 sizes.
+    return true;
+}
+
 gl::Extents Surface::getAttachmentSize(const gl::ImageIndex & /*target*/) const
 {
-    return gl::Extents(getWidth(), getHeight(), 1);
+    return getSize();
 }
 
 gl::Format Surface::getAttachmentFormat(GLenum binding, const gl::ImageIndex &target) const
@@ -780,9 +786,6 @@ void Surface::onSubjectStateChange(angle::SubjectIndex index, angle::SubjectMess
         case angle::SubjectMessage::SurfaceChanged:
             onStateChange(angle::SubjectMessage::SurfaceChanged);
             break;
-        case angle::SubjectMessage::SwapchainImageChanged:
-            onStateChange(angle::SubjectMessage::SwapchainImageChanged);
-            break;
         default:
             UNREACHABLE();
             break;
@@ -898,9 +901,11 @@ EGLAttribKHR Surface::getBitmapPointer() const
     return static_cast<EGLAttribKHR>((intptr_t)mLockBufferPtr);
 }
 
-EGLint Surface::getCompressionRate(const egl::Display *display) const
+egl::Error Surface::getCompressionRate(const egl::Display *display,
+                                       const gl::Context *context,
+                                       EGLint *rate)
 {
-    return mImplementation->getCompressionRate(display);
+    return mImplementation->getCompressionRate(display, context, rate);
 }
 
 egl::Error Surface::lockSurfaceKHR(const egl::Display *display, const AttributeMap &attributes)

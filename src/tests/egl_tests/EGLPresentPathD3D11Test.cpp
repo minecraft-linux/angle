@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "test_utils/ANGLETest.h"
 
 #include <d3d11.h>
@@ -39,18 +43,17 @@ class EGLPresentPathD3D11 : public ANGLETest<>
         int clientVersion = GetParam().majorVersion;
 
         // Set up EGL Display
-        EGLint displayAttribs[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE,
-                                   GetParam().getRenderer(),
-                                   EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE,
-                                   GetParam().eglParameters.majorVersion,
-                                   EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE,
-                                   GetParam().eglParameters.majorVersion,
-                                   EGL_EXPERIMENTAL_PRESENT_PATH_ANGLE,
-                                   usePresentPathFast ? EGL_EXPERIMENTAL_PRESENT_PATH_FAST_ANGLE
-                                                      : EGL_EXPERIMENTAL_PRESENT_PATH_COPY_ANGLE,
-                                   EGL_NONE};
-        mDisplay =
-            eglGetPlatformDisplayEXT(EGL_PLATFORM_ANGLE_ANGLE, EGL_DEFAULT_DISPLAY, displayAttribs);
+        EGLAttrib displayAttribs[] = {EGL_PLATFORM_ANGLE_TYPE_ANGLE,
+                                      GetParam().getRenderer(),
+                                      EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE,
+                                      GetParam().eglParameters.majorVersion,
+                                      EGL_PLATFORM_ANGLE_MAX_VERSION_MAJOR_ANGLE,
+                                      GetParam().eglParameters.majorVersion,
+                                      EGL_EXPERIMENTAL_PRESENT_PATH_ANGLE,
+                                      usePresentPathFast ? EGL_EXPERIMENTAL_PRESENT_PATH_FAST_ANGLE
+                                                         : EGL_EXPERIMENTAL_PRESENT_PATH_COPY_ANGLE,
+                                      EGL_NONE};
+        mDisplay = eglGetPlatformDisplay(GetEglPlatform(), EGL_DEFAULT_DISPLAY, displayAttribs);
         ASSERT_TRUE(EGL_NO_DISPLAY != mDisplay);
         ASSERT_EGL_TRUE(eglInitialize(mDisplay, nullptr, nullptr));
 

@@ -6,6 +6,10 @@
 
 // State.cpp: Implements the State class, encapsulating raw GL state.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/State.h"
 
 #include <string.h>
@@ -115,6 +119,21 @@ bool IsTextureCompatibleWithSampler(TextureType texture, TextureType sampler)
     return false;
 }
 
+// While pixel local storage is active, the drawbuffers on and after 'firstPLSDrawBuffer'
+// are blocked from the client and reserved for internal use by PLS.
+bool HasPLSOverriddenDrawBuffers(const Caps &caps,
+                                 GLuint numActivePlanes,
+                                 GLint *firstPLSDrawBuffer)
+{
+    if (numActivePlanes != 0)
+    {
+        *firstPLSDrawBuffer =
+            caps.maxCombinedDrawBuffersAndPixelLocalStoragePlanes - numActivePlanes;
+        return *firstPLSDrawBuffer < caps.maxDrawBuffers;
+    }
+    return false;
+}
+
 uint32_t gIDCounter = 1;
 }  // namespace
 
@@ -173,13 +192,14 @@ void UpdateBufferBinding(const Context *context,
     }
 }
 
-void UpdateIndexedBufferBinding(const Context *context,
+bool UpdateIndexedBufferBinding(const Context *context,
                                 OffsetBindingPointer<Buffer> *binding,
                                 Buffer *buffer,
                                 BufferBinding target,
                                 GLintptr offset,
                                 GLsizeiptr size)
 {
+    bool isBindingDirty = context->isWebGL();
     if (context->isWebGL())
     {
         if (target == BufferBinding::TransformFeedback)
@@ -193,8 +213,21 @@ void UpdateIndexedBufferBinding(const Context *context,
     }
     else
     {
-        binding->set(context, buffer, offset, size);
+        ASSERT(!isBindingDirty);
+        isBindingDirty = binding->get() != buffer || binding->getOffset() != offset ||
+                         binding->getSize() != size;
+        // If buffer changed, update everything otherwise update just the offset and size
+        if (binding->get() != buffer)
+        {
+            binding->set(context, buffer, offset, size);
+        }
+        else if (buffer != nullptr)
+        {
+            binding->assignOffsetAndSize(offset, size);
+        }
     }
+
+    return isBindingDirty;
 }
 
 // These template functions must be defined before they are instantiated in kBufferSetters.
@@ -244,30 +277,7 @@ template <>
 void State::setGenericBufferBinding<BufferBinding::ElementArray>(const Context *context,
                                                                  Buffer *buffer)
 {
-    Buffer *oldBuffer = mVertexArray->mState.mElementArrayBuffer.get();
-    if (oldBuffer)
-    {
-        oldBuffer->removeObserver(&mVertexArray->mState.mElementArrayBuffer);
-        oldBuffer->removeContentsObserver(mVertexArray, kElementArrayBufferIndex);
-        if (context->isWebGL())
-        {
-            oldBuffer->onNonTFBindingChanged(-1);
-        }
-        oldBuffer->release(context);
-    }
-    mVertexArray->mState.mElementArrayBuffer.assign(buffer);
-    if (buffer)
-    {
-        buffer->addObserver(&mVertexArray->mState.mElementArrayBuffer);
-        buffer->addContentsObserver(mVertexArray, kElementArrayBufferIndex);
-        if (context->isWebGL())
-        {
-            buffer->onNonTFBindingChanged(1);
-        }
-        buffer->addRef();
-    }
-    mVertexArray->mDirtyBits.set(VertexArray::DIRTY_BIT_ELEMENT_ARRAY_BUFFER);
-    mVertexArray->mIndexRangeCache.invalidate();
+    mVertexArray->bindElementBuffer(context, buffer);
     mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
 }
 
@@ -356,6 +366,7 @@ PrivateState::PrivateState(const Version &clientVersion,
       mFragmentShaderDerivativeHint(GL_NONE),
       mNearZ(0),
       mFarZ(0),
+      mGroupMarkerCount(0),
       mProvokingVertex(gl::ProvokingVertexConvention::LastVertexConvention),
       mActiveSampler(0),
       mPrimitiveRestart(false),
@@ -380,7 +391,10 @@ PrivateState::PrivateState(const Version &clientVersion,
       mBoundingBoxMaxZ(1.0f),
       mBoundingBoxMaxW(1.0f),
       mShadingRatePreserveAspectRatio(false),
-      mShadingRate(ShadingRate::Undefined),
+      mShadingRateQCOM(ShadingRate::Undefined),
+      // If the shading rate has not been set, the shading rate will be SHADING_RATE_1X1_PIXELS_EXT
+      mShadingRateEXT(ShadingRate::_1x1),
+      mCombinerOps{CombinerOp::Keep, CombinerOp::Keep},
       mFetchPerSample(false),
       mIsPerfMonitorActive(false),
       mTiledRendering(false),
@@ -388,7 +402,9 @@ PrivateState::PrivateState(const Version &clientVersion,
       mClientArraysEnabled(clientArraysEnabled),
       mRobustResourceInit(robustResourceInit),
       mProgramBinaryCacheEnabled(programBinaryCacheEnabled),
-      mDebug(debug)
+      mVertexArrayPrivate(nullptr),
+      mDebug(debug),
+      mVertexArrayHandleAllocator(IMPLEMENTATION_MAX_OBJECT_HANDLES)
 {}
 
 PrivateState::~PrivateState() = default;
@@ -458,7 +474,7 @@ void PrivateState::initialize(Context *context)
 
     // This coherent blending is enabled by default, but can be enabled or disabled by calling
     // glEnable() or glDisable() with the symbolic constant GL_BLEND_ADVANCED_COHERENT_KHR.
-    mBlendAdvancedCoherent = context->getExtensions().blendEquationAdvancedCoherentKHR;
+    mBlendAdvancedCoherent = true;
 
     mPrimitiveRestart = false;
 
@@ -484,6 +500,7 @@ void PrivateState::initializeForCapture(const Context *context)
 void PrivateState::reset()
 {
     mClipDistancesEnabled.reset();
+    mVertexArrayMap.clear();
 }
 
 void PrivateState::setColorClearValue(float red, float green, float blue, float alpha)
@@ -513,13 +530,16 @@ void PrivateState::setColorMask(bool red, bool green, bool blue, bool alpha)
     if (hasActivelyOverriddenPLSDrawBuffers(&firstPLSDrawBuffer))
     {
         // Some draw buffers are currently overridden by pixel local storage. Update only the
-        // buffers that are still visible to the client.
+        // buffers that are still visible to the client and defer the remaining updates until PLS
+        // ends.
+        assert(firstPLSDrawBuffer == 0 || mExtensions.drawBuffersIndexedAny());
         assert(firstPLSDrawBuffer < mCaps.maxDrawBuffers);
         for (GLint i = 0; i < firstPLSDrawBuffer; ++i)
         {
             ASSERT(mExtensions.drawBuffersIndexedAny());
             setColorMaskIndexed(red, green, blue, alpha, i);
         }
+        mPLSDeferredColorMasks = mBlendStateExt.expandColorMaskValue(red, green, blue, alpha);
         return;
     }
 
@@ -536,8 +556,10 @@ void PrivateState::setColorMaskIndexed(bool red, bool green, bool blue, bool alp
 {
     if (isActivelyOverriddenPLSDrawBuffer(index))
     {
-        // The indexed draw buffer is currently overridden by pixel local storage. Setting the color
-        // mask has no effect.
+        // The indexed draw buffer is currently overridden by pixel local storage. Defer this update
+        // until PLS ends.
+        BlendStateExt::ColorMaskStorage::SetValueIndexed(
+            index, BlendStateExt::PackColorMask(red, green, blue, alpha), &mPLSDeferredColorMasks);
         return;
     }
 
@@ -665,13 +687,17 @@ void PrivateState::setBlend(bool enabled)
     if (hasActivelyOverriddenPLSDrawBuffers(&firstPLSDrawBuffer))
     {
         // Some draw buffers are currently overridden by pixel local storage. Update only the
-        // buffers that are still visible to the client.
+        // buffers that are still visible to the client and defer the remaining updates until PLS
+        // ends.
+        assert(firstPLSDrawBuffer == 0 || mExtensions.drawBuffersIndexedAny());
         assert(firstPLSDrawBuffer < mCaps.maxDrawBuffers);
         for (GLint i = 0; i < firstPLSDrawBuffer; ++i)
         {
             ASSERT(mExtensions.drawBuffersIndexedAny());
             setBlendIndexed(enabled, i);
         }
+        mPLSDeferredBlendEnables =
+            enabled ? mBlendStateExt.getAllEnabledMask() : DrawBufferMask::Zero();
         return;
     }
 
@@ -689,8 +715,9 @@ void PrivateState::setBlendIndexed(bool enabled, GLuint index)
 {
     if (isActivelyOverriddenPLSDrawBuffer(index))
     {
-        // The indexed draw buffer is currently overridden by pixel local storage. Enabling
-        // blend has no effect.
+        // The indexed draw buffer is currently overridden by pixel local storage. Defer this update
+        // until PLS ends.
+        mPLSDeferredBlendEnables.set(index, enabled);
         return;
     }
 
@@ -775,7 +802,7 @@ void PrivateState::setBlendColor(float red, float green, float blue, float alpha
 {
     // In ES2 without render-to-float extensions, BlendColor clamps to [0,1] on store.
     // On ES3+, or with render-to-float exts enabled, it does not clamp on store.
-    const bool isES2 = mClientVersion.major == 2;
+    const bool isES2 = mClientVersion == ES_2_0;
     const bool hasFloatBlending =
         mExtensions.colorBufferFloatEXT || mExtensions.colorBufferHalfFloatEXT ||
         mExtensions.colorBufferFloatRgbCHROMIUM || mExtensions.colorBufferFloatRgbaCHROMIUM;
@@ -941,6 +968,16 @@ void PrivateState::setPolygonOffsetFill(bool enabled)
     }
 }
 
+void PrivateState::setFetchPerSample(bool enabled)
+{
+    if (mFetchPerSample != enabled)
+    {
+        mFetchPerSample = enabled;
+        mDirtyBits.set(state::DIRTY_BIT_EXTENDED);
+        mExtendedDirtyBits.set(state::EXTENDED_DIRTY_BIT_FETCH_PER_SAMPLE_ENABLED);
+    }
+}
+
 void PrivateState::setPolygonOffsetParams(GLfloat factor, GLfloat units, GLfloat clamp)
 {
     // An application can pass NaN values here, so handle this gracefully
@@ -1088,11 +1125,26 @@ void PrivateState::setViewportParams(GLint x, GLint y, GLsizei width, GLsizei he
     }
 }
 
-void PrivateState::setShadingRate(GLenum rate)
+void PrivateState::setShadingRateQCOM(ShadingRate rate)
 {
-    mShadingRate = FromGLenum<ShadingRate>(rate);
+    mShadingRateQCOM = rate;
     mDirtyBits.set(state::DIRTY_BIT_EXTENDED);
-    mExtendedDirtyBits.set(state::EXTENDED_DIRTY_BIT_SHADING_RATE);
+    mExtendedDirtyBits.set(state::EXTENDED_DIRTY_BIT_SHADING_RATE_QCOM);
+}
+
+void PrivateState::setShadingRateEXT(ShadingRate rate)
+{
+    mShadingRateEXT = rate;
+    mDirtyBits.set(state::DIRTY_BIT_EXTENDED);
+    mExtendedDirtyBits.set(state::EXTENDED_DIRTY_BIT_SHADING_RATE_EXT);
+}
+
+void PrivateState::setShadingRateCombinerOps(CombinerOp combinerOp0, CombinerOp combinerOp1)
+{
+    mCombinerOps[0] = combinerOp0;
+    mCombinerOps[1] = combinerOp1;
+    mDirtyBits.set(state::DIRTY_BIT_EXTENDED);
+    mExtendedDirtyBits.set(state::EXTENDED_DIRTY_BIT_SHADING_RATE_EXT);
 }
 
 void PrivateState::setPackAlignment(GLint alignment)
@@ -1145,20 +1197,15 @@ void PrivateState::setUnpackImageHeight(GLint imageHeight)
 
 bool PrivateState::hasActivelyOverriddenPLSDrawBuffers(GLint *firstActivePLSDrawBuffer) const
 {
-    if (mPixelLocalStorageActivePlanes != 0)
-    {
-        *firstActivePLSDrawBuffer =
-            PixelLocalStorage::FirstOverriddenDrawBuffer(mCaps, mPixelLocalStorageActivePlanes);
-        return *firstActivePLSDrawBuffer < mCaps.maxDrawBuffers;
-    }
-    return false;
+    return HasPLSOverriddenDrawBuffers(mCaps, mPixelLocalStorageActivePlanes,
+                                       firstActivePLSDrawBuffer);
 }
 
 bool PrivateState::isActivelyOverriddenPLSDrawBuffer(GLint drawbuffer) const
 {
-    return mPixelLocalStorageActivePlanes != 0 &&
-           drawbuffer >=
-               PixelLocalStorage::FirstOverriddenDrawBuffer(mCaps, mPixelLocalStorageActivePlanes);
+    GLint firstPLSDrawBuffer;
+    return hasActivelyOverriddenPLSDrawBuffers(&firstPLSDrawBuffer) &&
+           drawbuffer >= firstPLSDrawBuffer;
 }
 
 void PrivateState::setUnpackSkipImages(GLint skipImages)
@@ -1195,7 +1242,10 @@ void PrivateState::setFramebufferSRGB(bool sRGB)
         mFramebufferSRGB = sRGB;
         mDirtyBits.set(state::DIRTY_BIT_FRAMEBUFFER_SRGB_WRITE_CONTROL_MODE);
         mDirtyObjects.set(state::DIRTY_OBJECT_DRAW_FRAMEBUFFER);
-        mDirtyObjects.set(state::DIRTY_OBJECT_DRAW_ATTACHMENTS);
+        if (isRobustResourceInitEnabled())
+        {
+            mDirtyObjects.set(state::DIRTY_OBJECT_DRAW_ATTACHMENTS);
+        }
     }
 }
 
@@ -1210,7 +1260,98 @@ void PrivateState::setPatchVertices(GLuint value)
 
 void PrivateState::setPixelLocalStorageActivePlanes(GLsizei n)
 {
-    mPixelLocalStorageActivePlanes = n;
+    if (n != 0)
+    {
+        // Pixel local storage is beginning.
+        ASSERT(mPixelLocalStorageActivePlanes == 0);
+
+        GLint firstPLSDrawBuffer;
+        if (HasPLSOverriddenDrawBuffers(mCaps, n, &firstPLSDrawBuffer))
+        {
+            // Save the original blend & color mask state so we can restore it when PLS ends.
+            mPLSDeferredBlendEnables = mBlendStateExt.getEnabledMask();
+            mPLSDeferredColorMasks   = mBlendStateExt.getColorMaskBits();
+
+            // Disable blend & enable color mask on the reserved PLS planes.
+            if (firstPLSDrawBuffer == 0)
+            {
+                if (mBlendStateExt.getEnabledMask().test(0))
+                {
+                    setBlend(false);
+                }
+                if (mBlendStateExt.getColorMaskIndexed(0) != BlendStateExt::kColorMaskRGBA)
+                {
+                    setColorMask(true, true, true, true);
+                }
+            }
+            else
+            {
+                ASSERT(mExtensions.drawBuffersIndexedAny());
+                for (GLint i = firstPLSDrawBuffer; i < mCaps.maxDrawBuffers; ++i)
+                {
+                    if (mBlendStateExt.getEnabledMask().test(i))
+                    {
+                        setBlendIndexed(false, i);
+                    }
+                    if (mBlendStateExt.getColorMaskIndexed(i) != BlendStateExt::kColorMaskRGBA)
+                    {
+                        setColorMaskIndexed(true, true, true, true, i);
+                    }
+                }
+            }
+        }
+
+        // Set mPixelLocalStorageActivePlanes last, so the setBlend()/setColorMask() calls above
+        // don't bounce.
+        mPixelLocalStorageActivePlanes = n;
+    }
+    else
+    {
+        // Pixel local storage is ending.
+        ASSERT(mPixelLocalStorageActivePlanes != 0);
+
+        // Set mPixelLocalStorageActivePlanes first, so the following calls to
+        // setBlend()/setColorMask() don't bounce.
+        GLsizei formerPLSPlaneCount    = mPixelLocalStorageActivePlanes;
+        mPixelLocalStorageActivePlanes = 0;
+
+        GLint firstPLSDrawBuffer;
+        if (HasPLSOverriddenDrawBuffers(mCaps, formerPLSPlaneCount, &firstPLSDrawBuffer))
+        {
+            bool r, g, b, a;
+            if (firstPLSDrawBuffer == 0)
+            {
+                if (mPLSDeferredBlendEnables.test(0))
+                {
+                    setBlend(true);
+                }
+                const uint8_t colorMask =
+                    BlendStateExt::ColorMaskStorage::GetValueIndexed(0, mPLSDeferredColorMasks);
+                if (colorMask != BlendStateExt::kColorMaskRGBA)
+                {
+                    BlendStateExt::UnpackColorMask(colorMask, &r, &g, &b, &a);
+                    setColorMask(r, g, b, a);
+                }
+            }
+            else
+            {
+                for (GLint i = firstPLSDrawBuffer; i < mCaps.maxDrawBuffers; ++i)
+                {
+                    if (mPLSDeferredBlendEnables.test(i))
+                    {
+                        setBlendIndexed(true, i);
+                    }
+                    const uint8_t colorMask =
+                        BlendStateExt::ColorMaskStorage::GetValueIndexed(i, mPLSDeferredColorMasks);
+                    if (colorMask != BlendStateExt::kColorMaskRGBA)
+                    {
+                        BlendStateExt::UnpackColorMask(colorMask, &r, &g, &b, &a);
+                        setColorMaskIndexed(r, g, b, a, i);
+                    }
+                }
+            }
+        }
+    }
 }
 
 void PrivateState::setLineWidth(GLfloat width)
@@ -1379,7 +1520,7 @@ void PrivateState::setEnableFeature(GLenum feature, bool enabled)
             setDither(enabled);
             return;
         case GL_COLOR_LOGIC_OP:
-            if (mClientVersion.major == 1)
+            if (mClientVersion < ES_2_0)
             {
                 // Handle logicOp in GLES1 through the GLES1 state management and emulation.
                 // Otherwise this state could be set as part of ANGLE_logic_op.
@@ -1422,7 +1563,7 @@ void PrivateState::setEnableFeature(GLenum feature, bool enabled)
         case GL_CLIP_DISTANCE7_EXT:
             // NOTE(hqle): These enums are conflicted with GLES1's enums, need
             // to do additional check here:
-            if (mClientVersion.major >= 2)
+            if (mClientVersion >= ES_2_0)
             {
                 setClipDistanceEnable(feature - GL_CLIP_DISTANCE0_EXT, enabled);
                 return;
@@ -1432,13 +1573,13 @@ void PrivateState::setEnableFeature(GLenum feature, bool enabled)
             mShadingRatePreserveAspectRatio = enabled;
             return;
         case GL_FETCH_PER_SAMPLE_ARM:
-            mFetchPerSample = enabled;
+            setFetchPerSample(enabled);
             return;
         default:
             break;
     }
 
-    ASSERT(mClientVersion.major == 1);
+    ASSERT(mClientVersion < ES_2_0);
 
     // GLES1 emulation. Need to separate from main switch due to conflict enum between
     // GL_CLIP_DISTANCE0_EXT & GL_CLIP_PLANE0
@@ -1550,7 +1691,7 @@ bool PrivateState::getEnableFeature(GLenum feature) const
         case GL_DITHER:
             return isDitherEnabled();
         case GL_COLOR_LOGIC_OP:
-            if (mClientVersion.major == 1)
+            if (mClientVersion < ES_2_0)
             {
                 // Handle logicOp in GLES1 through the GLES1 state management and emulation.
                 break;
@@ -1589,7 +1730,7 @@ bool PrivateState::getEnableFeature(GLenum feature) const
         case GL_CLIP_DISTANCE5_EXT:
         case GL_CLIP_DISTANCE6_EXT:
         case GL_CLIP_DISTANCE7_EXT:
-            if (mClientVersion.major >= 2)
+            if (mClientVersion >= ES_2_0)
             {
                 // If GLES version is 1, the GL_CLIP_DISTANCE0_EXT enum will be used as
                 // GL_CLIP_PLANE0 instead.
@@ -1602,7 +1743,7 @@ bool PrivateState::getEnableFeature(GLenum feature) const
             return mFetchPerSample;
     }
 
-    ASSERT(mClientVersion.major == 1);
+    ASSERT(mClientVersion < ES_2_0);
 
     switch (feature)
     {
@@ -1688,12 +1829,7 @@ void PrivateState::getBooleanv(GLenum pname, GLboolean *params) const
         case GL_COLOR_WRITEMASK:
         {
             // non-indexed get returns the state of draw buffer zero
-            bool r, g, b, a;
-            mBlendStateExt.getColorMaskIndexed(0, &r, &g, &b, &a);
-            params[0] = r;
-            params[1] = g;
-            params[2] = b;
-            params[3] = a;
+            getBooleani_v(GL_COLOR_WRITEMASK, 0, params);
             break;
         }
         case GL_CULL_FACE:
@@ -1730,14 +1866,13 @@ void PrivateState::getBooleanv(GLenum pname, GLboolean *params) const
             *params = mDepthStencil.depthTest;
             break;
         case GL_BLEND:
-            // non-indexed get returns the state of draw buffer zero
-            *params = mBlendStateExt.getEnabledMask().test(0);
+            *params = isBlendEnabled();
             break;
         case GL_DITHER:
             *params = mRasterizer.dither;
             break;
         case GL_COLOR_LOGIC_OP:
-            if (mClientVersion.major == 1)
+            if (mClientVersion < ES_2_0)
             {
                 // Handle logicOp in GLES1 through the GLES1 state management.
                 *params = getEnableFeature(pname);
@@ -1804,7 +1939,7 @@ void PrivateState::getBooleanv(GLenum pname, GLboolean *params) const
         case GL_CLIP_DISTANCE5_EXT:
         case GL_CLIP_DISTANCE6_EXT:
         case GL_CLIP_DISTANCE7_EXT:
-            if (mClientVersion.major >= 2)
+            if (mClientVersion >= ES_2_0)
             {
                 // If GLES version is 1, the GL_CLIP_DISTANCE0_EXT enum will be used as
                 // GL_CLIP_PLANE0 instead.
@@ -1819,8 +1954,13 @@ void PrivateState::getBooleanv(GLenum pname, GLboolean *params) const
         case GL_FRAGMENT_SHADER_FRAMEBUFFER_FETCH_MRT_ARM:
             *params = mCaps.fragmentShaderFramebufferFetchMRT;
             break;
+        // EXT_fragment_shading_rate
+        case GL_FRAGMENT_SHADING_RATE_NON_TRIVIAL_COMBINERS_SUPPORTED_EXT:
+            *params =
+                mCaps.fragmentShadingRateProperties.fragmentShadingRateNonTrivialCombinersSupport;
+            break;
         default:
-            if (mClientVersion.major == 1)
+            if (mClientVersion < ES_2_0)
             {
                 *params = getEnableFeature(pname);
             }
@@ -2013,7 +2153,7 @@ void PrivateState::getIntegerv(GLenum pname, GLint *params) const
             *params = mStencilRef;
             break;
         case GL_STENCIL_VALUE_MASK:
-            *params = CastMaskValue(mDepthStencil.stencilMask);
+            *params = mDepthStencil.stencilMask;
             break;
         case GL_STENCIL_BACK_FUNC:
             *params = mDepthStencil.stencilBackFunc;
@@ -2022,7 +2162,7 @@ void PrivateState::getIntegerv(GLenum pname, GLint *params) const
             *params = mStencilBackRef;
             break;
         case GL_STENCIL_BACK_VALUE_MASK:
-            *params = CastMaskValue(mDepthStencil.stencilBackMask);
+            *params = mDepthStencil.stencilBackMask;
             break;
         case GL_STENCIL_FAIL:
             *params = mDepthStencil.stencilFail;
@@ -2065,10 +2205,10 @@ void PrivateState::getIntegerv(GLenum pname, GLint *params) const
             *params = ToGLenum(mBlendStateExt.getEquationAlphaIndexed(0));
             break;
         case GL_STENCIL_WRITEMASK:
-            *params = CastMaskValue(mDepthStencil.stencilWritemask);
+            *params = mDepthStencil.stencilWritemask;
             break;
         case GL_STENCIL_BACK_WRITEMASK:
-            *params = CastMaskValue(mDepthStencil.stencilBackWritemask);
+            *params = mDepthStencil.stencilBackWritemask;
             break;
         case GL_STENCIL_CLEAR_VALUE:
             *params = mStencilClearValue;
@@ -2157,7 +2297,12 @@ void PrivateState::getIntegerv(GLenum pname, GLint *params) const
 
         // GL_QCOM_shading_rate
         case GL_SHADING_RATE_QCOM:
-            *params = ToGLenum(mShadingRate);
+            *params = ToGLenum(mShadingRateQCOM);
+            break;
+
+        // GL_EXT_fragment_shading_rate
+        case GL_SHADING_RATE_EXT:
+            *params = ToGLenum(mShadingRateEXT);
             break;
 
         // GL_ANGLE_shader_pixel_local_storage
@@ -2175,6 +2320,7 @@ void PrivateState::getIntegerv(GLenum pname, GLint *params) const
             *params = mCaps.fragmentShaderFramebufferFetchMRT ? 1 : 0;
             break;
 
+        // GL_KHR_blend_equation_advanced_coherent
         case GL_BLEND_ADVANCED_COHERENT_KHR:
             *params = mBlendAdvancedCoherent ? 1 : 0;
             break;
@@ -2230,8 +2376,12 @@ void PrivateState::getBooleani_v(GLenum target, GLuint index, GLboolean *data) c
         case GL_COLOR_WRITEMASK:
         {
             ASSERT(static_cast<size_t>(index) < mBlendStateExt.getDrawBufferCount());
+            const uint8_t colorMask = isActivelyOverriddenPLSDrawBuffer(index)
+                                          ? BlendStateExt::ColorMaskStorage::GetValueIndexed(
+                                                index, mPLSDeferredColorMasks)
+                                          : mBlendStateExt.getColorMaskIndexed(index);
             bool r, g, b, a;
-            mBlendStateExt.getColorMaskIndexed(index, &r, &g, &b, &a);
+            BlendStateExt::UnpackColorMask(colorMask, &r, &g, &b, &a);
             data[0] = r;
             data[1] = g;
             data[2] = b;
@@ -2244,6 +2394,49 @@ void PrivateState::getBooleani_v(GLenum target, GLuint index, GLboolean *data) c
     }
 }
 
+VertexArrayID PrivateState::getVertexArrayId() const
+{
+    ASSERT(mVertexArrayPrivate != nullptr);
+    return mVertexArrayPrivate->id();
+}
+
+void PrivateState::setVertexAttribFormat(GLuint attribIndex,
+                                         GLint size,
+                                         VertexAttribType type,
+                                         bool normalized,
+                                         bool pureInteger,
+                                         GLuint relativeOffset)
+{
+    mVertexArrayPrivate->setVertexAttribFormat(attribIndex, size, type, normalized, pureInteger,
+                                               relativeOffset);
+    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
+}
+
+void PrivateState::setVertexAttribBinding(GLuint attribIndex, GLuint bindingIndex)
+{
+    mVertexArrayPrivate->setVertexAttribBinding(attribIndex, bindingIndex);
+    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
+}
+
+void PrivateState::setVertexBindingDivisor(GLuint bindingIndex, GLuint divisor)
+{
+    mVertexArrayPrivate->setVertexBindingDivisor(bindingIndex, divisor);
+    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
+}
+
+void PrivateState::setEnableVertexAttribArray(unsigned int attribNum, bool enabled)
+{
+    mVertexArrayPrivate->enableAttribute(attribNum, enabled);
+    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
+}
+
+void PrivateState::setVertexAttribDivisor(GLuint index, GLuint divisor)
+{
+    mVertexArrayPrivate->setVertexAttribDivisor(index, divisor);
+    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
+}
+
+// State implementation.
 State::State(const State *shareContextState,
              egl::ShareGroup *shareGroup,
              TextureManager *shareTextures,
@@ -2259,12 +2452,14 @@ State::State(const State *shareContextState,
              EGLenum contextPriority,
              bool hasRobustAccess,
              bool hasProtectedContent,
-             bool isExternal)
+             bool isExternal,
+             bool passthroughShaders)
     : mID({gIDCounter++}),
       mContextPriority(contextPriority),
       mHasRobustAccess(hasRobustAccess),
       mHasProtectedContent(hasProtectedContent),
       mIsDebugContext(debug),
+      mPassthroughShaders(passthroughShaders),
       mShareGroup(shareGroup),
       mContextMutex(contextMutex),
       mBufferManager(AllocateOrGetSharedResourceManager(shareContextState, &State::mBufferManager)),
@@ -2658,6 +2853,29 @@ void State::invalidateTextureBindings(TextureType type)
     mDirtyBits.set(state::DIRTY_BIT_TEXTURE_BINDINGS);
 }
 
+bool State::isTextureBoundToActivePLS(TextureID textureID) const
+{
+    if (getPixelLocalStorageActivePlanes() == 0)
+    {
+        return false;
+    }
+    PixelLocalStorage *pls = getDrawFramebuffer()->peekPixelLocalStorage();
+    if (pls == nullptr)
+    {
+        // Even though there is a nonzero number of active PLS planes, peekPixelLocalStorage() may
+        // still return null if we are in the middle of deleting the active framebuffer.
+        return false;
+    }
+    for (GLuint i = 0; i < getCaps().maxPixelLocalStoragePlanes; ++i)
+    {
+        if (pls->getPlane(i).getTextureID() == textureID)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 void State::setSamplerBinding(const Context *context, GLuint textureUnit, Sampler *sampler)
 {
     if (mSamplers[textureUnit].get() == sampler)
@@ -2762,6 +2980,7 @@ void State::setDrawFramebufferBinding(Framebuffer *framebuffer)
         if (isRobustResourceInitEnabled() && mDrawFramebuffer->hasResourceThatNeedsInit())
         {
             mDirtyObjects.set(state::DIRTY_OBJECT_DRAW_ATTACHMENTS);
+            mDirtyObjects.set(state::DIRTY_OBJECT_DRAW_FRAMEBUFFER);
         }
     }
 }
@@ -2810,8 +3029,11 @@ bool State::removeDrawFramebufferBinding(FramebufferID framebuffer)
 
 void State::setVertexArrayBinding(const Context *context, VertexArray *vertexArray)
 {
+    // We have to call onBindingChanged even if we are rebinding the same vertex array, because
+    // underlying buffer may have changed.
     if (mVertexArray == vertexArray)
     {
+        mVertexArray->onRebind(context);
         return;
     }
 
@@ -2825,6 +3047,8 @@ void State::setVertexArrayBinding(const Context *context, VertexArray *vertexArr
     }
 
     mVertexArray = vertexArray;
+    mPrivateState.setVertexArrayPrivate(vertexArray);
+
     mDirtyBits.set(state::DIRTY_BIT_VERTEX_ARRAY_BINDING);
 
     if (mVertexArray && mVertexArray->hasAnyDirtyBit())
@@ -2839,6 +3063,7 @@ bool State::removeVertexArrayBinding(const Context *context, VertexArrayID verte
     {
         mVertexArray->onBindingChanged(context, -1);
         mVertexArray = nullptr;
+        mPrivateState.setVertexArrayPrivate(nullptr);
         mDirtyBits.set(state::DIRTY_BIT_VERTEX_ARRAY_BINDING);
         mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
         return true;
@@ -2860,24 +3085,6 @@ void State::bindVertexBuffer(const Context *context,
                              GLsizei stride)
 {
     getVertexArray()->bindVertexBuffer(context, bindingIndex, boundBuffer, offset, stride);
-    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
-}
-
-void State::setVertexAttribFormat(GLuint attribIndex,
-                                  GLint size,
-                                  VertexAttribType type,
-                                  bool normalized,
-                                  bool pureInteger,
-                                  GLuint relativeOffset)
-{
-    getVertexArray()->setVertexAttribFormat(attribIndex, size, type, normalized, pureInteger,
-                                            relativeOffset);
-    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
-}
-
-void State::setVertexBindingDivisor(const Context *context, GLuint bindingIndex, GLuint divisor)
-{
-    getVertexArray()->setVertexBindingDivisor(context, bindingIndex, divisor);
     mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
 }
 
@@ -3049,7 +3256,10 @@ angle::Result State::setIndexedBufferBinding(const Context *context,
                                              GLintptr offset,
                                              GLsizeiptr size)
 {
-    setBufferBinding(context, target, buffer);
+    if (mBoundBuffers[target].get() != buffer)
+    {
+        setBufferBinding(context, target, buffer);
+    }
 
     switch (target)
     {
@@ -3058,20 +3268,43 @@ angle::Result State::setIndexedBufferBinding(const Context *context,
             setBufferBinding(context, target, buffer);
             break;
         case BufferBinding::Uniform:
+        {
             mBoundUniformBuffersMask.set(index, buffer != nullptr);
-            UpdateIndexedBufferBinding(context, &mUniformBuffers[index], buffer, target, offset,
-                                       size);
-            onUniformBufferStateChange(index);
-            break;
+            BufferDirtyTypeBitMask dirtyTypeMask = {};
+            if (mUniformBuffers[index].get() != buffer)
+            {
+                dirtyTypeMask.set();
+            }
+            else
+            {
+                dirtyTypeMask.set(BufferDirtyType::Offset,
+                                  buffer && mUniformBuffers[index].getOffset() != offset);
+                dirtyTypeMask.set(BufferDirtyType::Size,
+                                  buffer && mUniformBuffers[index].getSize() != size);
+            }
+            mUniformBufferBlocksDirtyTypeMask |= dirtyTypeMask;
+            if (UpdateIndexedBufferBinding(context, &mUniformBuffers[index], buffer, target, offset,
+                                           size))
+            {
+                onUniformBufferStateChange(index, angle::SubjectMessage::SubjectChanged);
+            }
+        }
+        break;
         case BufferBinding::AtomicCounter:
             mBoundAtomicCounterBuffersMask.set(index, buffer != nullptr);
-            UpdateIndexedBufferBinding(context, &mAtomicCounterBuffers[index], buffer, target,
-                                       offset, size);
+            if (UpdateIndexedBufferBinding(context, &mAtomicCounterBuffers[index], buffer, target,
+                                           offset, size))
+            {
+                onAtomicCounterBufferStateChange(index);
+            }
             break;
         case BufferBinding::ShaderStorage:
             mBoundShaderStorageBuffersMask.set(index, buffer != nullptr);
-            UpdateIndexedBufferBinding(context, &mShaderStorageBuffers[index], buffer, target,
-                                       offset, size);
+            if (UpdateIndexedBufferBinding(context, &mShaderStorageBuffers[index], buffer, target,
+                                           offset, size))
+            {
+                onShaderStorageBufferStateChange(index);
+            }
             break;
         default:
             UNREACHABLE();
@@ -3114,13 +3347,13 @@ angle::Result State::detachBuffer(Context *context, const Buffer *buffer)
     if (curTransformFeedback)
     {
         ANGLE_TRY(curTransformFeedback->detachBuffer(context, bufferID));
-        context->getStateCache().onActiveTransformFeedbackChange(context);
+        context->onActiveTransformFeedbackChange();
     }
 
     if (mVertexArray && mVertexArray->detachBuffer(context, bufferID))
     {
         mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
-        context->getStateCache().onVertexArrayStateChange(context);
+        context->getMutablePrivateStateCache()->onVertexArrayStateChange();
     }
 
     for (size_t uniformBufferIndex : mBoundUniformBuffersMask)
@@ -3159,18 +3392,6 @@ angle::Result State::detachBuffer(Context *context, const Buffer *buffer)
     }
 
     return angle::Result::Continue;
-}
-
-void State::setEnableVertexAttribArray(unsigned int attribNum, bool enabled)
-{
-    getVertexArray()->enableAttribute(attribNum, enabled);
-    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
-}
-
-void State::setVertexAttribDivisor(const Context *context, GLuint index, GLuint divisor)
-{
-    getVertexArray()->setVertexAttribDivisor(context, index, divisor);
-    mDirtyObjects.set(state::DIRTY_OBJECT_VERTEX_ARRAY);
 }
 
 const void *State::getVertexAttribPointer(unsigned int attribNum) const
@@ -3513,7 +3734,7 @@ void State::getIntegeri_v(const Context *context, GLenum target, GLuint index, G
             break;
         case GL_VERTEX_BINDING_BUFFER:
             ASSERT(static_cast<size_t>(index) < mVertexArray->getMaxBindings());
-            *data = mVertexArray->getVertexBinding(index).getBuffer().id().value;
+            *data = mVertexArray->getVertexArrayBufferID(index).value;
             break;
         case GL_VERTEX_BINDING_DIVISOR:
             ASSERT(static_cast<size_t>(index) < mVertexArray->getMaxBindings());
@@ -3789,7 +4010,7 @@ angle::Result State::syncProgramPipelineObject(const Context *context, Command c
     return angle::Result::Continue;
 }
 
-angle::Result State::syncDirtyObject(const Context *context, GLenum target)
+angle::Result State::syncDirtyObject(const Context *context, GLenum target, Command command)
 {
     state::DirtyObjects localSet;
 
@@ -3797,16 +4018,24 @@ angle::Result State::syncDirtyObject(const Context *context, GLenum target)
     {
         case GL_READ_FRAMEBUFFER:
             localSet.set(state::DIRTY_OBJECT_READ_FRAMEBUFFER);
+            if (mDirtyObjects.test(state::DIRTY_OBJECT_READ_ATTACHMENTS))
+            {
+                localSet.set(state::DIRTY_OBJECT_READ_ATTACHMENTS);
+            }
             break;
         case GL_DRAW_FRAMEBUFFER:
             localSet.set(state::DIRTY_OBJECT_DRAW_FRAMEBUFFER);
+            if (mDirtyObjects.test(state::DIRTY_OBJECT_DRAW_ATTACHMENTS))
+            {
+                localSet.set(state::DIRTY_OBJECT_DRAW_ATTACHMENTS);
+            }
             break;
         default:
             UNREACHABLE();
             break;
     }
 
-    return syncDirtyObjects(context, localSet, Command::Other);
+    return syncDirtyObjects(context, localSet, command);
 }
 
 void State::setObjectDirty(GLenum target)
@@ -3914,9 +4143,10 @@ angle::Result State::onExecutableChange(const Context *context)
         }
     }
 
-    // Mark uniform blocks as _not_ dirty. When an executable changes, the backends should already
-    // reprocess all uniform blocks.  These dirty bits only track what's made dirty afterwards.
-    mDirtyUniformBlocks.reset();
+    // Set all active blocks dirty on executable change
+    mDirtyUniformBlocks = mExecutable->getActiveUniformBufferBlocks();
+    // Set all types dirty on executable change
+    mUniformBufferBlocksDirtyTypeMask.set();
 
     return angle::Result::Continue;
 }
@@ -4018,14 +4248,27 @@ void State::onImageStateChange(const Context *context, size_t unit)
     }
 }
 
-void State::onUniformBufferStateChange(size_t uniformBufferIndex)
+void State::onUniformBufferStateChange(size_t uniformBufferIndex, angle::SubjectMessage message)
 {
     if (mExecutable)
     {
         // When a buffer at a given binding changes, set all blocks mapped to it dirty.
         mDirtyUniformBlocks |=
             mExecutable->getUniformBufferBlocksMappedToBinding(uniformBufferIndex);
+
+        if (message == angle::SubjectMessage::InternalMemoryAllocationChanged)
+        {
+            mUniformBufferBlocksDirtyTypeMask.set(BufferDirtyType::Binding);
+        }
+        else
+        {
+            ASSERT(message == angle::SubjectMessage::SubjectChanged ||   // buffer state change
+                   message == angle::SubjectMessage::SubjectMapped ||    // buffer map
+                   message == angle::SubjectMessage::SubjectUnmapped ||  // buffer unmap
+                   message == angle::SubjectMessage::BindingChanged);    // XFB state change
+        }
     }
+
     // This could be represented by a different dirty bit. Using the same one keeps it simple.
     mDirtyBits.set(state::DIRTY_BIT_UNIFORM_BUFFER_BINDINGS);
 }

@@ -6,6 +6,10 @@
 // Utilities to map clspv interface variables to OpenCL and Vulkan mappings.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/vulkan/clspv_utils.h"
 #include "common/log_utils.h"
 #include "libANGLE/renderer/vulkan/CLDeviceVk.h"
@@ -22,6 +26,12 @@
 
 #include "spirv-tools/libspirv.h"
 #include "spirv-tools/libspirv.hpp"
+
+#if defined(ANGLE_ENABLE_ASSERTS)
+constexpr bool kAngleDebug = true;
+#else
+constexpr bool kAngleDebug = false;
+#endif
 
 namespace rx
 {
@@ -94,30 +104,44 @@ std::string PrintFormattedString(const std::string &formatString,
             {
                 // all floats with same convention as snprintf
                 if (size == 2)
+                {
                     bytesWritten = snprintf(out.data(), outSize, formatString.c_str(),
                                             cl_half_to_float(ReadPtrAs<cl_half>(data)));
+                }
                 else if (size == 4)
+                {
                     bytesWritten =
                         snprintf(out.data(), outSize, formatString.c_str(), ReadPtrAs<float>(data));
+                }
                 else
+                {
                     bytesWritten = snprintf(out.data(), outSize, formatString.c_str(),
                                             ReadPtrAs<double>(data));
+                }
                 break;
             }
             default:
             {
                 if (size == 1)
+                {
                     bytesWritten = snprintf(out.data(), outSize, formatString.c_str(),
                                             ReadPtrAs<uint8_t>(data));
+                }
                 else if (size == 2)
+                {
                     bytesWritten = snprintf(out.data(), outSize, formatString.c_str(),
                                             ReadPtrAs<uint16_t>(data));
+                }
                 else if (size == 4)
+                {
                     bytesWritten = snprintf(out.data(), outSize, formatString.c_str(),
                                             ReadPtrAs<uint32_t>(data));
+                }
                 else
+                {
                     bytesWritten = snprintf(out.data(), outSize, formatString.c_str(),
                                             ReadPtrAs<uint64_t>(data));
+                }
                 break;
             }
         }
@@ -288,6 +312,11 @@ void ProcessPrintfStatement(unsigned char *&data,
     }
 
     std::printf("%s", printfOutput.c_str());
+
+    if (kAngleDebug)
+    {
+        INFO() << "ANGLE-CL.Kernel: " << printfOutput.c_str();
+    }
 }
 
 std::string GetSpvVersionAsClspvString(spv_target_env spvVersion)
@@ -318,6 +347,61 @@ std::vector<std::string> GetNativeBuiltins(const vk::Renderer *renderer)
     return {};
 }
 }  // anonymous namespace
+
+namespace clspv_cl
+{
+
+cl::AddressingMode GetAddressingMode(uint32_t mask)
+{
+    cl::AddressingMode addressingMode = cl::AddressingMode::Clamp;
+
+    switch (mask & clspv::kSamplerAddressMask)
+    {
+        case clspv::CLK_ADDRESS_NONE:
+        default:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_NONE));
+            break;
+        case clspv::CLK_ADDRESS_CLAMP_TO_EDGE:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_CLAMP_TO_EDGE));
+            break;
+        case clspv::CLK_ADDRESS_CLAMP:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_CLAMP));
+            break;
+        case clspv::CLK_ADDRESS_MIRRORED_REPEAT:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_MIRRORED_REPEAT));
+            break;
+        case clspv::CLK_ADDRESS_REPEAT:
+            addressingMode =
+                cl::FromCLenum<cl::AddressingMode>(static_cast<CLenum>(CL_ADDRESS_REPEAT));
+            break;
+    }
+
+    return addressingMode;
+}
+
+cl::FilterMode GetFilterMode(uint32_t mask)
+{
+    cl::FilterMode filterMode = cl::FilterMode::Nearest;
+
+    switch (mask & clspv::kSamplerFilterMask)
+    {
+        case clspv::CLK_FILTER_NEAREST:
+        default:
+            filterMode = cl::FromCLenum<cl::FilterMode>(static_cast<CLenum>(CL_FILTER_NEAREST));
+            break;
+        case clspv::CLK_FILTER_LINEAR:
+            filterMode = cl::FromCLenum<cl::FilterMode>(static_cast<CLenum>(CL_FILTER_LINEAR));
+            break;
+    }
+
+    return filterMode;
+}
+
+}  // namespace clspv_cl
 
 // Process the data recorded into printf storage buffer along with the info in printfino descriptor
 // and write it to stdout.
@@ -362,6 +446,11 @@ std::string ClspvGetCompilerOptions(const CLDeviceVk *device)
         ASSERT(false);
     }
     options += addressBits == 64 ? " -arch=spir64" : " -arch=spir";
+    if (rendererVk->getFeatures().supportsBufferDeviceAddress.enabled)
+    {
+        ASSERT(addressBits == 64);
+        options += " -physical-storage-buffers ";
+    }
 
     // select SPIR-V version target
     options += " --spv-version=" + GetSpvVersionAsClspvString(device->getSpirvVersion());
@@ -398,6 +487,17 @@ std::string ClspvGetCompilerOptions(const CLDeviceVk *device)
     options += " --global-offset";
     options += " --enable-printf";
     options += " --cl-kernel-arg-info";
+
+    // add opencl atomic feature macros
+    featureMacros.push_back("__opencl_c_atomic_order_acq_rel");
+    featureMacros.push_back("__opencl_c_atomic_order_seq_cst");
+    featureMacros.push_back("__opencl_c_atomic_scope_device");
+
+    // check for int8 support
+    if (rendererVk->getFeatures().supportsShaderInt8.enabled)
+    {
+        options += " --int8 --rewrite-packed-structs";
+    }
 
     // 8 bit storage buffer support
     if (!rendererVk->getFeatures().supports8BitStorageBuffer.enabled)
@@ -472,9 +572,25 @@ std::string ClspvGetCompilerOptions(const CLDeviceVk *device)
         featureMacros.push_back("__opencl_c_read_write_images");
     }
 
+    if (rendererVk->getFeatures().supportsBufferDeviceAddress.enabled)
+    {
+        // It is for generating ConstantDataStorageBuffer without -physical-storage-buffers,
+        // ConstantDataPointerPushConstant with -physical-storage-buffers
+        // TODO: this flag is only on in case of supportsBufferDeviceAddress.enabled
+        // until ConstantDataStorageBuffer will be implemented.
+        // http://anglebug.com/442950569
+        options += " -module-constants-in-storage-buffer";
+    }
+
     if (rendererVk->getEnabledFeatures().features.shaderInt64)
     {
         featureMacros.push_back("__opencl_c_int64");
+    }
+
+    if (rendererVk->getFeatures().supportsShaderIntegerDotProduct.enabled)
+    {
+        featureMacros.push_back("__opencl_c_integer_dot_product_input_4x8bit");
+        featureMacros.push_back("__opencl_c_integer_dot_product_input_4x8bit_packed");
     }
 
     if (!rteModes.empty())

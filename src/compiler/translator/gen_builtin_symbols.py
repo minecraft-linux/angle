@@ -590,7 +590,6 @@ basic_types_enumeration = [
     'SamplerBuffer',
     'SamplerCubeArray',
     'SamplerCubeArrayShadow',
-    'Sampler2DRectShadow',
     'ISampler2DRect',
     'ISamplerBuffer',
     'ISamplerCubeArray',
@@ -602,28 +601,19 @@ basic_types_enumeration = [
     'Image3D',
     'Image2DArray',
     'ImageCube',
-    'Image2DMS',
-    'Image2DMSArray',
     'ImageCubeArray',
-    'ImageRect',
     'ImageBuffer',
     'IImage2D',
     'IImage3D',
     'IImage2DArray',
     'IImageCube',
-    'IImage2DMS',
-    'IImage2DMSArray',
     'IImageCubeArray',
-    'IImageRect',
     'IImageBuffer',
     'UImage2D',
     'UImage3D',
     'UImage2DArray',
     'UImageCube',
-    'UImage2DMS',
-    'UImage2DMSArray',
     'UImageCubeArray',
-    'UImageRect',
     'UImageBuffer',
     'PixelLocalANGLE',
     'IPixelLocalANGLE',
@@ -1434,13 +1424,12 @@ def gen_function_variants(function_props):
         function_variants.append(function_props)
         return function_variants
 
-    # If we have image_params then we're generating variants for 33 separate functions,
+    # If we have image_params then we're generating variants for multiple separate functions,
     # each for a different type of image variable
     if 'image_params' in gen_type:
         variants = [['gimage2D', 'ivec2'], ['gimage3D', 'ivec3'], ['gimageCube', 'ivec3'],
                     ['gimageBuffer', 'int'], ['gimage2DArray', 'ivec3'],
-                    ['gimageCubeArray', 'ivec3'], ['gimageRect', 'ivec2'],
-                    ['gimage2DMS', 'ivec2', 'int'], ['gimage2DMSArray', 'ivec3', 'int']]
+                    ['gimageCubeArray', 'ivec3']]
         for variant in variants:
             image_variant_parameters = []
             for param in parameters:

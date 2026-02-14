@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 //
 // Build the intermediate representation.
 //
@@ -113,22 +117,24 @@ angle::Matrix<float> GetMatrix(const TConstantUnion *paramArray,
                                const unsigned int cols)
 {
     std::vector<float> elements;
+    elements.reserve(rows * cols);
     for (size_t i = 0; i < rows * cols; i++)
         elements.push_back(paramArray[i].getFConst());
     // Transpose is used since the Matrix constructor expects arguments in row-major order,
     // whereas the paramArray is in column-major order. Rows/cols parameters are also flipped below
     // so that the created matrix will have the expected dimensions after the transpose.
-    return angle::Matrix<float>(elements, cols, rows).transpose();
+    return angle::Matrix<float>(std::move(elements), cols, rows).transpose();
 }
 
 angle::Matrix<float> GetMatrix(const TConstantUnion *paramArray, const unsigned int size)
 {
     std::vector<float> elements;
+    elements.reserve(size * size);
     for (size_t i = 0; i < size * size; i++)
         elements.push_back(paramArray[i].getFConst());
     // Transpose is used since the Matrix constructor expects arguments in row-major order,
     // whereas the paramArray is in column-major order.
-    return angle::Matrix<float>(elements, size).transpose();
+    return angle::Matrix<float>(std::move(elements), size).transpose();
 }
 
 void SetUnionArrayFromMatrix(const angle::Matrix<float> &m, TConstantUnion *resultArray)
@@ -136,7 +142,7 @@ void SetUnionArrayFromMatrix(const angle::Matrix<float> &m, TConstantUnion *resu
     // Transpose is used since the input Matrix is in row-major order,
     // whereas the actual result should be in column-major order.
     angle::Matrix<float> result       = m.transpose();
-    std::vector<float> resultElements = result.elements();
+    angle::Span<const float> resultElements = result.elements();
     for (size_t i = 0; i < resultElements.size(); i++)
         resultArray[i].setFConst(resultElements[i]);
 }
@@ -452,6 +458,11 @@ TIntermBlock::TIntermBlock(std::initializer_list<TIntermNode *> stmts)
     }
 }
 
+TIntermBlock::TIntermBlock(TIntermSequence &&stmts) : mStatements(std::move(stmts))
+{
+    mIsTreeRoot = false;
+}
+
 size_t TIntermBlock::getChildCount() const
 {
     return mStatements.size();
@@ -467,10 +478,9 @@ bool TIntermBlock::replaceChildNode(TIntermNode *original, TIntermNode *replacem
     return replaceChildNodeInternal(original, replacement);
 }
 
-void TIntermBlock::replaceAllChildren(const TIntermSequence &newStatements)
+void TIntermBlock::replaceAllChildren(TIntermSequence &&newStatements)
 {
-    mStatements.clear();
-    mStatements.insert(mStatements.begin(), newStatements.begin(), newStatements.end());
+    mStatements = std::move(newStatements);
 }
 
 size_t TIntermFunctionPrototype::getChildCount() const
@@ -1465,7 +1475,7 @@ void TIntermUnary::promote()
 TPrecision TIntermUnary::derivePrecision() const
 {
     // Unary operators generally derive their precision from their operand, except for a few
-    // built-ins where this is overriden.
+    // built-ins where this is overridden.
     switch (mOp)
     {
         case EOpArrayLength:
@@ -1538,7 +1548,7 @@ void TIntermUnary::propagatePrecision(TPrecision precision)
     }
 }
 
-TIntermSwizzle::TIntermSwizzle(TIntermTyped *operand, const TVector<int> &swizzleOffsets)
+TIntermSwizzle::TIntermSwizzle(TIntermTyped *operand, const TVector<uint32_t> &swizzleOffsets)
     : TIntermExpression(TType(EbtFloat, EbpUndefined)),
       mOperand(operand),
       mSwizzleOffsets(swizzleOffsets),
@@ -1740,8 +1750,8 @@ bool TIntermSwizzle::hasDuplicateOffsets() const
     {
         return true;
     }
-    int offsetCount[4] = {0u, 0u, 0u, 0u};
-    for (const auto offset : mSwizzleOffsets)
+    uint32_t offsetCount[4] = {0u, 0u, 0u, 0u};
+    for (const uint32_t offset : mSwizzleOffsets)
     {
         offsetCount[offset]++;
         if (offsetCount[offset] > 1)
@@ -1757,7 +1767,7 @@ void TIntermSwizzle::setHasFoldedDuplicateOffsets(bool hasFoldedDuplicateOffsets
     mHasFoldedDuplicateOffsets = hasFoldedDuplicateOffsets;
 }
 
-bool TIntermSwizzle::offsetsMatch(int offset) const
+bool TIntermSwizzle::offsetsMatch(uint32_t offset) const
 {
     return mSwizzleOffsets.size() == 1 && mSwizzleOffsets[0] == offset;
 }
@@ -1765,7 +1775,7 @@ bool TIntermSwizzle::offsetsMatch(int offset) const
 ImmutableString TIntermSwizzle::getOffsetsAsXYZW() const
 {
     ImmutableStringBuilder offsets(mSwizzleOffsets.size());
-    for (const int offset : mSwizzleOffsets)
+    for (const uint32_t offset : mSwizzleOffsets)
     {
         switch (offset)
         {
@@ -2135,11 +2145,11 @@ TIntermTyped *TIntermSwizzle::fold(TDiagnostics * /* diagnostics */)
         // We need to fold the two swizzles into one, so that repeated swizzling can't cause stack
         // overflow in ParseContext::checkCanBeLValue().
         bool hadDuplicateOffsets = operandSwizzle->hasDuplicateOffsets();
-        TVector<int> foldedOffsets;
-        for (int offset : mSwizzleOffsets)
+        TVector<uint32_t> foldedOffsets;
+        for (uint32_t offset : mSwizzleOffsets)
         {
             // Offset should already be validated.
-            ASSERT(static_cast<size_t>(offset) < operandSwizzle->mSwizzleOffsets.size());
+            ASSERT(offset < operandSwizzle->mSwizzleOffsets.size());
             foldedOffsets.push_back(operandSwizzle->mSwizzleOffsets[offset]);
         }
         operandSwizzle->mSwizzleOffsets = foldedOffsets;
@@ -2210,10 +2220,10 @@ TIntermTyped *TIntermBinary::fold(TDiagnostics *diagnostics)
             TIntermSwizzle *leftSwizzle = mLeft->getAsSwizzleNode();
             if (leftSwizzle != nullptr)
             {
-                const TVector<int> &swizzleOffsets = leftSwizzle->getSwizzleOffsets();
+                const TVector<uint32_t> &swizzleOffsets = leftSwizzle->getSwizzleOffsets();
                 ASSERT(index < swizzleOffsets.size());
 
-                int remappedIndex = swizzleOffsets[index];
+                uint32_t remappedIndex = swizzleOffsets[index];
                 return new TIntermSwizzle(leftSwizzle->getOperand(), {remappedIndex});
             }
 
@@ -4227,7 +4237,7 @@ TConstantUnion *TIntermConstantUnion::FoldAggregateBuiltIn(TIntermAggregate *agg
 // TIntermPreprocessorDirective implementation.
 TIntermPreprocessorDirective::TIntermPreprocessorDirective(PreprocessorDirective directive,
                                                            ImmutableString command)
-    : mDirective(directive), mCommand(std::move(command))
+    : mDirective(directive), mCommand(command)
 {}
 
 TIntermPreprocessorDirective::TIntermPreprocessorDirective(const TIntermPreprocessorDirective &node)

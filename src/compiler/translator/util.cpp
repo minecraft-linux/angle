@@ -4,6 +4,11 @@
 // found in the LICENSE file.
 //
 
+#include "compiler/translator/IntermNode.h"
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "compiler/translator/util.h"
 
 #include <limits>
@@ -11,8 +16,9 @@
 #include "common/span.h"
 #include "common/utilities.h"
 #include "compiler/preprocessor/numeric_lex.h"
+#include "compiler/translator/BaseTypes.h"
 #include "compiler/translator/ImmutableStringBuilder.h"
-#include "compiler/translator/SymbolTable.h"
+#include "compiler/translator/Symbol.h"
 
 bool atoi_clamp(const char *str, unsigned int *value)
 {
@@ -101,14 +107,12 @@ bool IsInterpolationOut(TQualifier qualifier)
 }
 }  // anonymous namespace
 
-float NumericLexFloat32OutOfRangeToInfinity(const std::string &str)
+float NumericLexFloat32OutOfRangeToInfinity(const std::string &str, bool preserveDenorms)
 {
     // Parses a decimal string using scientific notation into a floating point number.
-    // Out-of-range values are converted to infinity. Values that are too small to be
-    // represented are converted to zero.
-
-    // The mantissa in decimal scientific notation. The magnitude of the mantissa integer does not
-    // matter.
+    // Out-of-range values are converted to infinity, and values that are too small to be
+    // represented are converted to zero (unless `preserveDenorms` is set). The mantissa in decimal
+    // scientific notation. The magnitude of the mantissa integer does not matter.
     unsigned int decimalMantissa = 0;
     size_t i                     = 0;
     bool decimalPointSeen        = false;
@@ -211,45 +215,60 @@ float NumericLexFloat32OutOfRangeToInfinity(const std::string &str)
             }
         }
     }
+
     // Do the calculation in 64-bit to avoid overflow.
     long long exponentLong =
         static_cast<long long>(exponent) + static_cast<long long>(exponentOffset);
+
     if (exponentLong > std::numeric_limits<float>::max_exponent10)
     {
         return std::numeric_limits<float>::infinity();
     }
-    // In 32-bit float, min_exponent10 is -37 but min() is
-    // 1.1754943E-38. 10^-37 may be the "minimum negative integer such
-    // that 10 raised to that power is a normalized float", but being
-    // constrained to powers of ten it's above min() (which is 2^-126).
-    // Values below min() are flushed to zero near the end of this
-    // function anyway so (AFAICT) this comparison is only done to ensure
-    // that the exponent will not make the pow() call (below) overflow.
-    // Comparing against -38 (min_exponent10 - 1) will do the trick.
-    else if (exponentLong < std::numeric_limits<float>::min_exponent10 - 1)
+
+    if (!preserveDenorms)
     {
-        return 0.0f;
+        // In 32-bit float, min_exponent10 is -37 but min() is
+        // 1.1754943E-38. 10^-37 may be the "minimum negative integer such
+        // that 10 raised to that power is a normalized float", but being
+        // constrained to powers of ten it's above min() (which is 2^-126).
+        // Values below min() are flushed to zero near the end of this
+        // function anyway so (AFAICT) this comparison is only done to ensure
+        // that the exponent will not make the pow() call (below) overflow.
+        // Comparing against -38 (min_exponent10 - 1) will do the trick.
+        if (exponentLong < std::numeric_limits<float>::min_exponent10 - 1)
+        {
+            return 0.0f;
+        }
     }
+
     // The exponent is in range, so we need to actually evaluate the float.
     exponent     = static_cast<int>(exponentLong);
     double value = decimalMantissa;
 
     // Calculate the exponent offset to normalize the mantissa.
     int normalizationExponentOffset = 1 - mantissaDecimalDigits;
+
     // Apply the exponent.
     value *= std::pow(10.0, static_cast<double>(exponent + normalizationExponentOffset));
+
     if (value > static_cast<double>(std::numeric_limits<float>::max()))
     {
         return std::numeric_limits<float>::infinity();
     }
-    if (static_cast<float>(value) < std::numeric_limits<float>::min())
+
+    if (!preserveDenorms)
     {
-        return 0.0f;
+        if (static_cast<float>(value) < std::numeric_limits<float>::min())
+        {
+            return 0.0f;
+        }
     }
+
+    // The below cast will correctly generate denormalized values
     return static_cast<float>(value);
 }
 
-bool strtof_clamp(const std::string &str, float *value)
+bool strtof_clamp(const std::string &str, float *value, bool preserveDenorms)
 {
     // Custom float parsing that can handle the following corner cases:
     //   1. The decimal mantissa is very small but the exponent is very large, putting the resulting
@@ -259,7 +278,7 @@ bool strtof_clamp(const std::string &str, float *value)
     //   3. The value is out-of-range and should be evaluated as infinity.
     //   4. The value is too small and should be evaluated as zero.
     // See ESSL 3.00.6 section 4.1.4 for the relevant specification.
-    *value = NumericLexFloat32OutOfRangeToInfinity(str);
+    *value = NumericLexFloat32OutOfRangeToInfinity(str, preserveDenorms);
     return !gl::isInf(*value);
 }
 
@@ -464,12 +483,43 @@ ImmutableString ArrayString(const TType &type)
     return arrayString;
 }
 
-ImmutableString GetTypeName(const TType &type, ShHashFunction64 hashFunction, NameMap *nameMap)
+ImmutableString GetTypeName(const TType &type,
+                            char prefix,
+                            ShHashFunction64 hashFunction,
+                            NameMap *nameMap)
 {
     if (type.getBasicType() == EbtStruct)
-        return HashName(type.getStruct(), hashFunction, nameMap);
+        return HashName(type.getStruct(), prefix, hashFunction, nameMap);
     else
         return ImmutableString(type.getBuiltInTypeNameString());
+}
+
+bool IsParam(TQualifier qualifier)
+{
+    switch (qualifier)
+    {
+        case EvqParamOut:
+        case EvqParamInOut:
+        case EvqParamIn:
+        case EvqParamConst:
+            return true;
+
+        default:
+            return false;
+    }
+}
+
+bool IsParamOut(TQualifier qualifier)
+{
+    switch (qualifier)
+    {
+        case EvqParamOut:
+        case EvqParamInOut:
+            return true;
+
+        default:
+            return false;
+    }
 }
 
 bool IsVaryingOut(TQualifier qualifier)
@@ -920,7 +970,8 @@ bool IsRedeclarableBuiltIn(const ImmutableString &name)
     return name == "gl_ClipDistance" || name == "gl_CullDistance" || name == "gl_FragDepth" ||
            name == "gl_LastFragData" || name == "gl_LastFragColorARM" ||
            name == "gl_LastFragDepthARM" || name == "gl_LastFragStencilARM" ||
-           name == "gl_PerVertex" || name == "gl_Position" || name == "gl_PointSize";
+           name == "gl_PerVertex" || name == "gl_in" || name == "gl_out" || name == "gl_Position" ||
+           name == "gl_PointSize";
 }
 
 size_t FindFieldIndex(const TFieldList &fieldList, const char *fieldName)
@@ -954,6 +1005,20 @@ Declaration ViewDeclaration(TIntermDeclaration &declNode, uint32_t index)
         symbolNode = initNode->getLeft()->getAsSymbolNode();
         ASSERT(symbolNode);
         return {*symbolNode, initNode->getRight()};
+    }
+}
+
+bool IsIndexOp(TOperator op)
+{
+    switch (op)
+    {
+        case EOpIndexDirect:
+        case EOpIndexDirectStruct:
+        case EOpIndexDirectInterfaceBlock:
+        case EOpIndexIndirect:
+            return true;
+        default:
+            return false;
     }
 }
 

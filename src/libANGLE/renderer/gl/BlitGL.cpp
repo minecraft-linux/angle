@@ -6,6 +6,10 @@
 
 // BlitGL.cpp: Implements the BlitGL class, a helper for blitting textures
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/gl/BlitGL.h"
 
 #include "common/FixedVector.h"
@@ -374,7 +378,7 @@ angle::Result BlitGL::copySubImageToLUMAWorkaroundTexture(const gl::Context *con
     }
 
     nativegl::CopyTexImageImageFormat copyTexImageFormat =
-        nativegl::GetCopyTexImageImageFormat(mFunctions, mFeatures, readFormat, readType);
+        nativegl::GetCopyTexImageImageFormat(mFunctions, mFeatures, readFormat);
 
     mStateManager->bindTexture(gl::TextureType::_2D, mScratchTextures[0]);
     ANGLE_GL_TRY_ALWAYS_CHECK(
@@ -543,7 +547,7 @@ angle::Result BlitGL::blitColorBufferWithShader(const gl::Context *context,
 
         const gl::InternalFormat &sourceInternalFormat       = *readAttachment->getFormat().info;
         nativegl::CopyTexImageImageFormat copyTexImageFormat = nativegl::GetCopyTexImageImageFormat(
-            mFunctions, mFeatures, sourceInternalFormat.internalFormat, sourceInternalFormat.type);
+            mFunctions, mFeatures, sourceInternalFormat.internalFormat);
         const FramebufferGL *sourceGL = GetImplAs<FramebufferGL>(source);
         mStateManager->bindFramebuffer(GL_READ_FRAMEBUFFER, sourceGL->getFramebufferID());
         mStateManager->bindTexture(gl::TextureType::_2D, textureId);

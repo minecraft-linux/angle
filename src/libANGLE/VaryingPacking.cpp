@@ -9,6 +9,10 @@
 //   allocation list for the D3D renderer.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/VaryingPacking.h"
 
 #include "common/CompiledShaderState.h"
@@ -108,7 +112,7 @@ bool InterfaceVariablesMatch(const sh::ShaderVariable &front, const sh::ShaderVa
     // Compare names, or if shader I/O blocks, block names.
     const std::string &backName  = back.isShaderIOBlock ? back.structOrBlockName : back.name;
     const std::string &frontName = front.isShaderIOBlock ? front.structOrBlockName : front.name;
-    return backName == frontName;
+    return backName == frontName && back.location == front.location;
 }
 
 GLint GetMaxShaderInputVectors(const Caps &caps, ShaderType shaderStage)

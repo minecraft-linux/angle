@@ -16,6 +16,16 @@
 #    include <vulkan/vulkan.h>
 #endif
 
+/* vulkan.h includes <X11/Xlib.h> when VK_USE_PLATFORM_XLIB_KHR is defined
+ * after https://github.com/KhronosGroup/Vulkan-Headers/pull/534.
+ * This defines some macros which break build, so undefine them here.
+ */
+#undef Always
+#undef Bool
+#undef None
+#undef Status
+#undef Success
+
 #if !defined(ANGLE_SHARED_LIBVULKAN)
 
 namespace rx
@@ -43,6 +53,9 @@ extern PFN_vkImportSemaphoreFdKHR vkImportSemaphoreFdKHR;
 // VK_EXT_external_memory_host
 extern PFN_vkGetMemoryHostPointerPropertiesEXT vkGetMemoryHostPointerPropertiesEXT;
 
+// VK_EXT_device_fault
+extern PFN_vkGetDeviceFaultInfoEXT vkGetDeviceFaultInfoEXT;
+
 // VK_EXT_host_query_reset
 extern PFN_vkResetQueryPoolEXT vkResetQueryPoolEXT;
 
@@ -61,6 +74,9 @@ extern PFN_vkGetImageMemoryRequirements2KHR vkGetImageMemoryRequirements2KHR;
 // VK_KHR_bind_memory2
 extern PFN_vkBindBufferMemory2KHR vkBindBufferMemory2KHR;
 extern PFN_vkBindImageMemory2KHR vkBindImageMemory2KHR;
+
+// VK_KHR_maintenance5
+extern PFN_vkCmdBindIndexBuffer2KHR vkCmdBindIndexBuffer2KHR;
 
 // VK_KHR_external_fence_capabilities
 extern PFN_vkGetPhysicalDeviceExternalFencePropertiesKHR
@@ -90,10 +106,6 @@ extern PFN_vkCreateImagePipeSurfaceFUCHSIA vkCreateImagePipeSurfaceFUCHSIA;
 extern PFN_vkGetAndroidHardwareBufferPropertiesANDROID vkGetAndroidHardwareBufferPropertiesANDROID;
 extern PFN_vkGetMemoryAndroidHardwareBufferANDROID vkGetMemoryAndroidHardwareBufferANDROID;
 #    endif
-
-#    if defined(ANGLE_PLATFORM_GGP)
-extern PFN_vkCreateStreamDescriptorSurfaceGGP vkCreateStreamDescriptorSurfaceGGP;
-#    endif  // defined(ANGLE_PLATFORM_GGP)
 
 // VK_KHR_shared_presentable_image
 extern PFN_vkGetSwapchainStatusKHR vkGetSwapchainStatusKHR;
@@ -147,6 +159,19 @@ extern PFN_vkCmdSetRenderingInputAttachmentIndicesKHR vkCmdSetRenderingInputAtta
 // VK_KHR_synchronization2
 extern PFN_vkCmdPipelineBarrier2KHR vkCmdPipelineBarrier2KHR;
 extern PFN_vkCmdWriteTimestamp2KHR vkCmdWriteTimestamp2KHR;
+
+// VK_KHR_external_memory_fd
+extern PFN_vkGetMemoryFdKHR vkGetMemoryFdKHR;
+extern PFN_vkGetMemoryFdPropertiesKHR vkGetMemoryFdPropertiesKHR;
+
+// VK_EXT_external_memory_host
+extern PFN_vkGetMemoryHostPointerPropertiesEXT vkGetMemoryHostPointerPropertiesEXT;
+
+// VK_KHR_buffer_device_address
+extern PFN_vkGetBufferDeviceAddressKHR vkGetBufferDeviceAddressKHR;
+
+// VK_QCOM_tile_memory_heap
+extern PFN_vkCmdBindTileMemoryQCOM vkCmdBindTileMemoryQCOM;
 
 }  // namespace rx
 

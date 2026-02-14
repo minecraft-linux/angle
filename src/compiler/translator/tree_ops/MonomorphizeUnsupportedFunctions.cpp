@@ -200,12 +200,12 @@ const TFunction *MonomorphizeFunction(TSymbolTable *symbolTable,
                               originalParam->symbolType());
             // Not replaced, add an identical parameter.
             substituteFunction->addParameter(substituteArgument);
-            (*argumentMapOut)[originalParam] = new TIntermSymbol(substituteArgument);
+            (*argumentMapOut)[originalParam->uniqueId()] = new TIntermSymbol(substituteArgument);
         }
         else
         {
             TIntermTyped *substituteArgument = (*replacedArguments)[nextReplacedArg].argument;
-            (*argumentMapOut)[originalParam] = substituteArgument;
+            (*argumentMapOut)[originalParam->uniqueId()] = substituteArgument;
 
             // Iterate over indices of the argument and create a new parameter for every non-const
             // index (which may be an expression).  Replace the symbol in the argument with a
@@ -535,7 +535,7 @@ void SortDeclarations(TIntermBlock *root)
     replacement.insert(replacement.end(), functionDefs.begin(), functionDefs.end());
 
     // Replace root's sequence with |replacement|.
-    root->replaceAllChildren(replacement);
+    root->replaceAllChildren(std::move(replacement));
 }
 
 bool MonomorphizeUnsupportedFunctionsImpl(TCompiler *compiler,

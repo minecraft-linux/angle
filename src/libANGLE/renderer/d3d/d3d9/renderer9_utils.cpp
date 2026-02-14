@@ -365,8 +365,6 @@ D3DQUERYTYPE ConvertQueryType(gl::QueryType type)
         case gl::QueryType::AnySamples:
         case gl::QueryType::AnySamplesConservative:
             return D3DQUERYTYPE_OCCLUSION;
-        case gl::QueryType::CommandsCompleted:
-            return D3DQUERYTYPE_EVENT;
         default:
             UNREACHABLE();
             return static_cast<D3DQUERYTYPE>(0);
@@ -481,6 +479,11 @@ static gl::TextureCaps GenerateTextureFormatCaps(GLenum internalFormat,
         textureCaps.sampleCounts.insert(1);
         for (unsigned int i = D3DMULTISAMPLE_2_SAMPLES; i <= D3DMULTISAMPLE_16_SAMPLES; i++)
         {
+            if (!gl::isPow2(i))
+            {
+                continue;
+            }
+
             D3DMULTISAMPLE_TYPE multisampleType = D3DMULTISAMPLE_TYPE(i);
 
             HRESULT result = d3d9->CheckDeviceMultiSampleType(
@@ -521,7 +524,7 @@ void GenerateCaps(IDirect3D9 *d3d9,
                                                                 adapter, currentDisplayMode.Format);
         textureCapsMap->insert(internalFormat, textureCaps);
 
-        maxSamples = std::max(maxSamples, textureCaps.getMaxSamples());
+        maxSamples = std::max(maxSamples, textureCaps.sampleCounts.getMaxSamples());
     }
 
     // GL core feature limits
@@ -761,7 +764,6 @@ void GenerateCaps(IDirect3D9 *d3d9,
     extensions->EGLImageExternalOES   = true;
     extensions->unpackSubimageEXT     = true;
     extensions->packSubimageNV        = true;
-    extensions->syncQueryCHROMIUM     = extensions->fenceNV;
     extensions->copyTextureCHROMIUM   = true;
     extensions->textureBorderClampEXT = true;
     extensions->textureBorderClampOES = true;

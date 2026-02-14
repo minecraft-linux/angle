@@ -4,6 +4,10 @@
 // found in the LICENSE file.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <cctype>
 #include <map>
 
@@ -523,12 +527,14 @@ static const char *GetOperatorString(TOperator op,
             return "metal::rint";
         case TOperator::EOpClamp:
             return "metal::clamp";  // TODO fast vs precise namespace
+        case TOperator::EOpLoopForwardProgress:
+            return "ANGLE_loopForwardProgress";
         case TOperator::EOpSaturate:
             return "metal::saturate";  // TODO fast vs precise namespace
         case TOperator::EOpMix:
-            if (!argType1->isScalar() && argType2 && argType2->getBasicType() == EbtBool)
+            if (argType2 && argType2->getBasicType() == EbtBool)
             {
-                return "ANGLE_mix_bool";
+                return "metal::select";
             }
             return "metal::mix";
         case TOperator::EOpStep:

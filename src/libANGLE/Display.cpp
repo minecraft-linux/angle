@@ -8,6 +8,10 @@
 // display on which graphics are drawn. Implements EGLDisplay.
 // [EGL 1.4] section 2.1.2 page 3.
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/Display.h"
 
 #include <algorithm>
@@ -29,9 +33,11 @@
 #include "common/utilities.h"
 #include "gpu_info_util/SystemInfo.h"
 #include "image_util/loadimage.h"
+#include "libANGLE/Constants.h"
 #include "libANGLE/Context.h"
 #include "libANGLE/Device.h"
 #include "libANGLE/EGLSync.h"
+#include "libANGLE/ErrorStrings.h"
 #include "libANGLE/Image.h"
 #include "libANGLE/ResourceManager.h"
 #include "libANGLE/Stream.h"
@@ -102,9 +108,8 @@ struct TLSData
 TLSData::TLSData() : errorScratchSpace(0) {}
 
 #if defined(ANGLE_PLATFORM_APPLE)
-// TODO(angleproject:6479): Due to a bug in Apple's dyld loader, `thread_local` will cause
-// excessive memory use. Temporarily avoid it by using pthread's thread
-// local storage instead.
+// TODO(http://anglebug.com/42264979): Due to a bug in Apple's dyld loader, `thread_local` will
+// cause excessive memory use. Temporarily avoid it by using pthread's thread local storage instead.
 static angle::TLSIndex GetDisplayTLSIndex()
 {
     static angle::TLSIndex DisplayIndex = TLS_INVALID_INDEX;
@@ -423,8 +428,13 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
             break;
 
 #    elif defined(ANGLE_PLATFORM_LINUX)
-#        if defined(ANGLE_USE_GBM)
+#        if defined(ANGLE_USE_GBM) || defined(ANGLE_USE_WAYLAND)
             if (platformType == 0)
+            {
+                impl = new rx::DisplayEGL(state);
+                break;
+            }
+            if (platformType == EGL_PLATFORM_GBM_KHR)
             {
                 impl = new rx::DisplayEGL(state);
                 break;
@@ -469,8 +479,13 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
 #    if defined(ANGLE_PLATFORM_WINDOWS)
             impl = new rx::DisplayWGL(state);
 #    elif defined(ANGLE_PLATFORM_LINUX)
-#        if defined(ANGLE_USE_GBM)
+#        if defined(ANGLE_USE_GBM) || defined(ANGLE_USE_WAYLAND)
             if (platformType == 0)
+            {
+                impl = new rx::DisplayEGL(state);
+                break;
+            }
+            if (platformType == EGL_PLATFORM_GBM_KHR)
             {
                 impl = new rx::DisplayEGL(state);
                 break;
@@ -579,12 +594,6 @@ rx::DisplayImpl *CreateDisplayFromAttribs(EGLAttrib displayType,
             if (rx::IsVulkanFuchsiaDisplayAvailable())
             {
                 impl = rx::CreateVulkanFuchsiaDisplay(state);
-            }
-            break;
-#    elif defined(ANGLE_PLATFORM_GGP)
-            if (rx::IsVulkanGGPDisplayAvailable())
-            {
-                impl = rx::CreateVulkanGGPDisplay(state);
             }
             break;
 #    elif defined(ANGLE_PLATFORM_APPLE)
@@ -947,6 +956,9 @@ Display::Display(EGLenum platform, EGLNativeDisplayType displayId, Device *eglDe
       mMemoryShaderCache(mBlobCache),
       mGlobalTextureShareGroupUsers(0),
       mGlobalSemaphoreShareGroupUsers(0),
+      mImageHandleAllocator(gl::IMPLEMENTATION_MAX_OBJECT_HANDLES),
+      mSurfaceHandleAllocator(gl::IMPLEMENTATION_MAX_OBJECT_HANDLES),
+      mSyncHandleAllocator(gl::IMPLEMENTATION_MAX_OBJECT_HANDLES),
       mTerminatedByApi(false)
 {}
 
@@ -1148,8 +1160,10 @@ Error Display::initialize()
         mDevice = nullptr;
     }
 
-    mState.singleThreadPool = angle::WorkerThreadPool::Create(1, ANGLEPlatformCurrent());
-    mState.multiThreadPool  = angle::WorkerThreadPool::Create(0, ANGLEPlatformCurrent());
+    mState.singleThreadPool = angle::WorkerThreadPool::Create(angle::ThreadPoolType::Synchronous, 0,
+                                                              ANGLEPlatformCurrent());
+    mState.multiThreadPool = angle::WorkerThreadPool::Create(angle::ThreadPoolType::Asynchronous, 0,
+                                                             ANGLEPlatformCurrent());
 
     if (kIsContextMutexEnabled)
     {
@@ -1400,7 +1414,12 @@ Error Display::createWindowSurface(const Config *configuration,
         ANGLE_TRY(restoreLostDevice());
     }
 
-    SurfaceID id = {mSurfaceHandleAllocator.allocate()};
+    SurfaceID id;
+    if (!mSurfaceHandleAllocator.allocate(&id.value))
+    {
+        return Error(EGL_BAD_ALLOC, gl::err::kHandleExhaustion);
+    }
+
     SurfacePointer surface(new WindowSurface(mImplementation, id, configuration, window, attribs,
                                              mFrontendFeatures.forceRobustResourceInit.enabled),
                            this);
@@ -1430,7 +1449,12 @@ Error Display::createPbufferSurface(const Config *configuration,
         ANGLE_TRY(restoreLostDevice());
     }
 
-    SurfaceID id = {mSurfaceHandleAllocator.allocate()};
+    SurfaceID id;
+    if (!mSurfaceHandleAllocator.allocate(&id.value))
+    {
+        return Error(EGL_BAD_ALLOC, gl::err::kHandleExhaustion);
+    }
+
     SurfacePointer surface(new PbufferSurface(mImplementation, id, configuration, attribs,
                                               mFrontendFeatures.forceRobustResourceInit.enabled),
                            this);
@@ -1456,7 +1480,12 @@ Error Display::createPbufferFromClientBuffer(const Config *configuration,
         ANGLE_TRY(restoreLostDevice());
     }
 
-    SurfaceID id = {mSurfaceHandleAllocator.allocate()};
+    SurfaceID id;
+    if (!mSurfaceHandleAllocator.allocate(&id.value))
+    {
+        return Error(EGL_BAD_ALLOC, gl::err::kHandleExhaustion);
+    }
+
     SurfacePointer surface(
         new PbufferSurface(mImplementation, id, configuration, buftype, clientBuffer, attribs,
                            mFrontendFeatures.forceRobustResourceInit.enabled),
@@ -1482,7 +1511,12 @@ Error Display::createPixmapSurface(const Config *configuration,
         ANGLE_TRY(restoreLostDevice());
     }
 
-    SurfaceID id = {mSurfaceHandleAllocator.allocate()};
+    SurfaceID id;
+    if (!mSurfaceHandleAllocator.allocate(&id.value))
+    {
+        return Error(EGL_BAD_ALLOC, gl::err::kHandleExhaustion);
+    }
+
     SurfacePointer surface(
         new PixmapSurface(mImplementation, id, configuration, nativePixmap, attribs,
                           mFrontendFeatures.forceRobustResourceInit.enabled),
@@ -1509,10 +1543,19 @@ Error Display::createImage(const gl::Context *context,
         ANGLE_TRY(restoreLostDevice());
     }
 
+    ImageID id;
+    if (!mImageHandleAllocator.allocate(&id.value))
+    {
+        return Error(EGL_BAD_ALLOC, gl::err::kHandleExhaustion);
+    }
+
     egl::ImageSibling *sibling = nullptr;
     if (IsTextureTarget(target))
     {
-        sibling = context->getTexture({egl_gl::EGLClientBufferToGLObjectHandle(buffer)});
+        gl::Texture *texture =
+            context->getTexture({egl_gl::EGLClientBufferToGLObjectHandle(buffer)});
+        texture->onBindAsEglImageSource();
+        sibling = texture;
     }
     else if (IsRenderbufferTarget(target))
     {
@@ -1528,7 +1571,6 @@ Error Display::createImage(const gl::Context *context,
     }
     ASSERT(sibling != nullptr);
 
-    ImageID id = {mImageHandleAllocator.allocate()};
     angle::UniqueObjectPointer<Image, Display> imagePtr(
         new Image(mImplementation, id, context, target, sibling, attribs), this);
     ANGLE_TRY(imagePtr->initialize(this, context));
@@ -1683,7 +1725,11 @@ Error Display::createSync(const gl::Context *currentContext,
 {
     ASSERT(isInitialized());
 
-    SyncID id = {mSyncHandleAllocator.allocate()};
+    SyncID id;
+    if (!mSyncHandleAllocator.allocate(&id.value))
+    {
+        return Error(EGL_BAD_ALLOC, gl::err::kHandleExhaustion);
+    }
 
     if (mImplementation->testDeviceLost())
     {
@@ -2131,7 +2177,7 @@ static ClientExtensions GenerateClientExtensions()
     extensions.platformDevice   = true;
 #endif
 
-#if defined(ANGLE_USE_GBM)
+#if defined(ANGLE_USE_GBM) || defined(ANGLE_USE_WAYLAND)
     extensions.platformGbmKHR = true;
 #endif
 
@@ -2379,8 +2425,10 @@ void Display::initializeFrontendFeatures()
 
     ANGLE_FEATURE_CONDITION(&mFrontendFeatures, forceMinimumMaxVertexAttributes, false);
 
-    // Reject shaders with undefined behavior.  In the compiler, this only applies to WebGL.
-    ANGLE_FEATURE_CONDITION(&mFrontendFeatures, rejectWebglShadersWithUndefinedBehavior, true);
+    // When the IR is built, use it by default.
+#ifdef ANGLE_IR
+    ANGLE_FEATURE_CONDITION(&mFrontendFeatures, useIr, true);
+#endif
 
     mImplementation->initializeFrontendFeatures(&mFrontendFeatures);
 }

@@ -8,12 +8,17 @@
 //    C struct versions of Metal sampler, depth stencil, render pass, render pipeline descriptors.
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include "libANGLE/renderer/metal/mtl_state_cache.h"
 
 #include <sstream>
 
 #include "common/debug.h"
 #include "common/hash_utils.h"
+#include "common/span.h"
 #include "libANGLE/renderer/metal/ContextMtl.h"
 #include "libANGLE/renderer/metal/mtl_resources.h"
 #include "libANGLE/renderer/metal/mtl_utils.h"
@@ -398,7 +403,7 @@ void DepthStencilDesc::updateStencilBackWriteMask(const gl::DepthStencilState &d
 
 size_t DepthStencilDesc::hash() const
 {
-    return angle::ComputeGenericHash(*this);
+    return angle::ComputeGenericHash(angle::byte_span_from_ref(*this));
 }
 
 // SamplerDesc implementation
@@ -466,7 +471,7 @@ bool SamplerDesc::operator==(const SamplerDesc &rhs) const
 
 size_t SamplerDesc::hash() const
 {
-    return angle::ComputeGenericHash(*this);
+    return angle::ComputeGenericHash(angle::byte_span_from_ref(*this));
 }
 
 // BlendDesc implementation
@@ -576,25 +581,6 @@ void RenderPipelineColorAttachmentDesc::reset(MTLPixelFormat format, const Blend
 }
 
 // RenderPipelineOutputDesc implementation
-bool RenderPipelineOutputDesc::operator==(const RenderPipelineOutputDesc &rhs) const
-{
-    if (numColorAttachments != rhs.numColorAttachments)
-    {
-        return false;
-    }
-
-    for (uint8_t i = 0; i < numColorAttachments; ++i)
-    {
-        if (colorAttachments[i] != rhs.colorAttachments[i])
-        {
-            return false;
-        }
-    }
-
-    return ANGLE_PROP_EQ(*this, rhs, depthAttachmentPixelFormat) &&
-           ANGLE_PROP_EQ(*this, rhs, stencilAttachmentPixelFormat);
-}
-
 void RenderPipelineOutputDesc::updateEnabledDrawBuffers(gl::DrawBufferMask enabledBuffers)
 {
     for (uint32_t colorIndex = 0; colorIndex < this->numColorAttachments; ++colorIndex)
@@ -640,7 +626,7 @@ bool RenderPipelineDesc::operator==(const RenderPipelineDesc &rhs) const
 
 size_t RenderPipelineDesc::hash() const
 {
-    return angle::ComputeGenericHash(*this);
+    return angle::ComputeGenericHash(angle::byte_span_from_ref(*this));
 }
 
 bool RenderPipelineDesc::rasterizationEnabled() const
@@ -823,6 +809,11 @@ bool RenderPassDesc::equalIgnoreLoadStoreOptions(const RenderPassDesc &other) co
         return false;
     }
 
+    if (rasterSampleCount != other.rasterSampleCount)
+    {
+        return false;
+    }
+
     return depthAttachment.equalIgnoreLoadStoreOptions(other.depthAttachment) &&
            stencilAttachment.equalIgnoreLoadStoreOptions(other.stencilAttachment);
 }
@@ -882,42 +873,6 @@ void RenderPassDesc::convertToMetalDesc(MTLRenderPassDescriptor *objCDesc,
         objCDesc.renderTargetHeight       = defaultHeight;
         objCDesc.defaultRasterSampleCount = 1;
     }
-}
-
-// ProvokingVertexPipelineDesc
-ProvokingVertexComputePipelineDesc::ProvokingVertexComputePipelineDesc()
-{
-    memset(this, 0, sizeof(*this));
-}
-ProvokingVertexComputePipelineDesc::ProvokingVertexComputePipelineDesc(
-    const ProvokingVertexComputePipelineDesc &src)
-{
-    memcpy(this, &src, sizeof(*this));
-}
-ProvokingVertexComputePipelineDesc::ProvokingVertexComputePipelineDesc(
-    ProvokingVertexComputePipelineDesc &&src)
-{
-    memcpy(this, &src, sizeof(*this));
-}
-ProvokingVertexComputePipelineDesc &ProvokingVertexComputePipelineDesc::operator=(
-    const ProvokingVertexComputePipelineDesc &src)
-{
-    memcpy(this, &src, sizeof(*this));
-    return *this;
-}
-bool ProvokingVertexComputePipelineDesc::operator==(
-    const ProvokingVertexComputePipelineDesc &rhs) const
-{
-    return memcmp(this, &rhs, sizeof(*this)) == 0;
-}
-bool ProvokingVertexComputePipelineDesc::operator!=(
-    const ProvokingVertexComputePipelineDesc &rhs) const
-{
-    return !(*this == rhs);
-}
-size_t ProvokingVertexComputePipelineDesc::hash() const
-{
-    return angle::ComputeGenericHash(*this);
 }
 
 // StateCache implementation

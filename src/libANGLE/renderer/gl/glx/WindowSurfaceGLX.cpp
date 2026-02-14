@@ -151,7 +151,7 @@ egl::Error WindowSurfaceGLX::makeCurrent(const gl::Context *context)
     return egl::NoError();
 }
 
-egl::Error WindowSurfaceGLX::swap(const gl::Context *context)
+egl::Error WindowSurfaceGLX::swap(const gl::Context *context, SurfaceSwapFeedback *feedback)
 {
     // We need to swap before resizing as some drivers clobber the back buffer
     // when the window is resized.
@@ -205,41 +205,22 @@ void WindowSurfaceGLX::setSwapInterval(const egl::Display *display, EGLint inter
     mSwapControl.targetSwapInterval = interval;
 }
 
-EGLint WindowSurfaceGLX::getWidth() const
+gl::Extents WindowSurfaceGLX::getSize() const
 {
     if (mUseChildWindow)
     {
         // If there's a child window, the size of the window is always the same as the cached
         // size of its parent.
-        return mParentWidth;
+        return gl::Extents(mParentWidth, mParentHeight, 1);
     }
     else
     {
         unsigned int parentWidth, parentHeight;
         if (!getWindowDimensions(mParent, &parentWidth, &parentHeight))
         {
-            return mParentWidth;
+            return gl::Extents(mParentWidth, mParentHeight, 1);
         }
-        return parentWidth;
-    }
-}
-
-EGLint WindowSurfaceGLX::getHeight() const
-{
-    if (mUseChildWindow)
-    {
-        // If there's a child window, the size of the window is always the same as the cached
-        // size of its parent.
-        return mParentHeight;
-    }
-    else
-    {
-        unsigned int parentWidth, parentHeight;
-        if (!getWindowDimensions(mParent, &parentWidth, &parentHeight))
-        {
-            return mParentHeight;
-        }
-        return parentHeight;
+        return gl::Extents(parentWidth, parentHeight, 1);
     }
 }
 

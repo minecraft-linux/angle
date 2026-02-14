@@ -7,6 +7,10 @@
 //   This test prints out the extension strings, configs and their attributes
 //
 
+#ifdef UNSAFE_BUFFERS_BUILD
+#    pragma allow_unsafe_buffers
+#endif
+
 #include <gtest/gtest.h>
 
 #include "common/string_utils.h"
@@ -78,20 +82,20 @@ const char *GetGLString(EGLint name)
 TEST_P(EGLPrintEGLinfoTest, PrintEGLInfo)
 {
     std::cout << "    EGL Information:" << std::endl;
-    std::cout << "\tVendor: " << GetEGLString(mDisplay, EGL_VENDOR) << std::endl;
-    std::cout << "\tVersion: " << GetEGLString(mDisplay, EGL_VERSION) << std::endl;
-    std::cout << "\tClient APIs: " << GetEGLString(mDisplay, EGL_CLIENT_APIS) << std::endl;
+    std::cout << "    Vendor: " << GetEGLString(mDisplay, EGL_VENDOR) << std::endl;
+    std::cout << "    Version: " << GetEGLString(mDisplay, EGL_VERSION) << std::endl;
+    std::cout << "    Client APIs: " << GetEGLString(mDisplay, EGL_CLIENT_APIS) << std::endl;
 
-    std::cout << "\tEGL Client Extensions:" << std::endl;
+    std::cout << "    EGL Client Extensions:" << std::endl;
     for (auto extension : ParseExtensions(GetEGLString(EGL_NO_DISPLAY, EGL_EXTENSIONS)))
     {
-        std::cout << "\t\t" << extension << std::endl;
+        std::cout << "        " << extension << std::endl;
     }
 
-    std::cout << "\tEGL Display Extensions:" << std::endl;
+    std::cout << "    EGL Display Extensions:" << std::endl;
     for (auto extension : ParseExtensions(GetEGLString(mDisplay, EGL_EXTENSIONS)))
     {
-        std::cout << "\t\t" << extension << std::endl;
+        std::cout << "        " << extension << std::endl;
     }
 
     std::cout << std::endl;
@@ -101,18 +105,18 @@ TEST_P(EGLPrintEGLinfoTest, PrintEGLInfo)
 TEST_P(EGLPrintEGLinfoTest, PrintGLInfo)
 {
     std::cout << "    GLES Information:" << std::endl;
-    std::cout << "\tVendor: " << GetGLString(GL_VENDOR) << std::endl;
-    std::cout << "\tVersion: " << GetGLString(GL_VERSION) << std::endl;
-    std::cout << "\tRenderer: " << GetGLString(GL_RENDERER) << std::endl;
-    std::cout << "\tShader: " << GetGLString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
+    std::cout << "    Vendor: " << GetGLString(GL_VENDOR) << std::endl;
+    std::cout << "    Version: " << GetGLString(GL_VERSION) << std::endl;
+    std::cout << "    Renderer: " << GetGLString(GL_RENDERER) << std::endl;
+    std::cout << "    Shader: " << GetGLString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
 
-    std::cout << "\tExtensions:" << std::endl;
+    std::cout << "    Extensions:" << std::endl;
 
     const std::vector<std::string> extensions = ParseExtensions(GetGLString(GL_EXTENSIONS));
 
     for (const std::string &extension : extensions)
     {
-        std::cout << "\t\t" << extension << std::endl;
+        std::cout << "        " << extension << std::endl;
     }
 
     std::cout << std::endl;
@@ -418,7 +422,7 @@ TEST_P(EGLPrintEGLinfoTest, PrintConfigInfo)
             (GetAttrib(mDisplay, config, EGL_COLOR_BUFFER_TYPE) == EGL_LUMINANCE_BUFFER)
                 ? "LUMINANCE"
                 : "RGB";
-        std::cout << "\tColor:" << GetAttrib(mDisplay, config, EGL_BUFFER_SIZE) << "bit "
+        std::cout << "    Color:" << GetAttrib(mDisplay, config, EGL_BUFFER_SIZE) << "bit "
                   << componentType << colorBuffType
                   << " Red:" << GetAttrib(mDisplay, config, EGL_RED_SIZE)
                   << " Green:" << GetAttrib(mDisplay, config, EGL_GREEN_SIZE)
@@ -428,7 +432,8 @@ TEST_P(EGLPrintEGLinfoTest, PrintConfigInfo)
                   << " AlphaMask:" << GetAttrib(mDisplay, config, EGL_ALPHA_MASK_SIZE) << std::endl;
 
         // Texture Binding
-        std::cout << "\tBinding RGB:" << (bool)GetAttrib(mDisplay, config, EGL_BIND_TO_TEXTURE_RGB)
+        std::cout << "    Binding RGB:"
+                  << (bool)GetAttrib(mDisplay, config, EGL_BIND_TO_TEXTURE_RGB)
                   << " RGBA:" << (bool)GetAttrib(mDisplay, config, EGL_BIND_TO_TEXTURE_RGBA)
                   << " MaxWidth:" << GetAttrib(mDisplay, config, EGL_MAX_PBUFFER_WIDTH)
                   << " MaxHeight:" << GetAttrib(mDisplay, config, EGL_MAX_PBUFFER_HEIGHT)
@@ -452,7 +457,7 @@ TEST_P(EGLPrintEGLinfoTest, PrintConfigInfo)
             default:
                 caveat = ".";
         }
-        std::cout << "\tCaveate: " << caveat;
+        std::cout << "    Caveate: " << caveat;
 
         EGLint conformant = GetAttrib(mDisplay, config, EGL_CONFORMANT);
         std::cout << " Conformant: ";
@@ -465,57 +470,57 @@ TEST_P(EGLPrintEGLinfoTest, PrintConfigInfo)
         std::cout << std::endl;
 
         // Ancilary buffers
-        std::cout << "\tAncilary " << "Depth:" << GetAttrib(mDisplay, config, EGL_DEPTH_SIZE)
+        std::cout << "    Ancilary " << "Depth:" << GetAttrib(mDisplay, config, EGL_DEPTH_SIZE)
                   << " Stencil:" << GetAttrib(mDisplay, config, EGL_STENCIL_SIZE)
                   << " SampleBuffs:" << GetAttrib(mDisplay, config, EGL_SAMPLE_BUFFERS)
                   << " Samples:" << GetAttrib(mDisplay, config, EGL_SAMPLES) << std::endl;
 
         // Swap interval
-        std::cout << "\tSwap Interval"
+        std::cout << "    Swap Interval"
                   << " Min:" << GetAttrib(mDisplay, config, EGL_MIN_SWAP_INTERVAL)
                   << " Max:" << GetAttrib(mDisplay, config, EGL_MAX_SWAP_INTERVAL) << std::endl;
 
         // Native
-        std::cout << "\tNative Renderable: " << GetAttrib(mDisplay, config, EGL_NATIVE_RENDERABLE)
+        std::cout << "    Native Renderable: " << GetAttrib(mDisplay, config, EGL_NATIVE_RENDERABLE)
                   << ", VisualID: " << GetAttrib(mDisplay, config, EGL_NATIVE_VISUAL_ID)
                   << ", VisualType: " << GetAttrib(mDisplay, config, EGL_NATIVE_VISUAL_TYPE)
                   << std::endl;
 
         // Surface type
         EGLint surfaceType = GetAttrib(mDisplay, config, EGL_SURFACE_TYPE);
-        std::cout << "\tSurface Type: ";
+        std::cout << "    Surface Type:";
         if (surfaceType & EGL_WINDOW_BIT)
-            std::cout << "WINDOW ";
+            std::cout << " WINDOW";
         if (surfaceType & EGL_PIXMAP_BIT)
-            std::cout << "PIXMAP ";
+            std::cout << " PIXMAP";
         if (surfaceType & EGL_PBUFFER_BIT)
-            std::cout << "PBUFFER ";
+            std::cout << " PBUFFER";
         if (surfaceType & EGL_MULTISAMPLE_RESOLVE_BOX_BIT)
-            std::cout << "MULTISAMPLE_RESOLVE_BOX ";
+            std::cout << " MULTISAMPLE_RESOLVE_BOX";
         if (surfaceType & EGL_SWAP_BEHAVIOR_PRESERVED_BIT)
-            std::cout << "SWAP_PRESERVE ";
+            std::cout << " SWAP_PRESERVE";
         std::cout << std::endl;
 
         // Renderable
         EGLint rendType = GetAttrib(mDisplay, config, EGL_RENDERABLE_TYPE);
-        std::cout << "\tRender: ";
+        std::cout << "    Render:";
         if (rendType & EGL_OPENGL_ES_BIT)
-            std::cout << "ES1 ";
+            std::cout << " ES1";
         if (rendType & EGL_OPENGL_ES2_BIT)
-            std::cout << "ES2 ";
+            std::cout << " ES2";
         if (rendType & EGL_OPENGL_ES3_BIT)
-            std::cout << "ES3 ";
+            std::cout << " ES3";
         std::cout << std::endl;
 
         // Extensions
         if (IsEGLDisplayExtensionEnabled(mDisplay, "EGL_ANDROID_recordable"))
         {
-            std::cout << "\tAndroid Recordable: "
+            std::cout << "    Android Recordable: "
                       << GetAttrib(mDisplay, config, EGL_RECORDABLE_ANDROID) << std::endl;
         }
         if (IsEGLDisplayExtensionEnabled(mDisplay, "EGL_ANDROID_framebuffer_target"))
         {
-            std::cout << "\tAndroid framebuffer target: "
+            std::cout << "    Android framebuffer target: "
                       << GetAttrib(mDisplay, config, EGL_FRAMEBUFFER_TARGET_ANDROID) << std::endl;
         }
 
@@ -524,14 +529,96 @@ TEST_P(EGLPrintEGLinfoTest, PrintConfigInfo)
     }
 }
 
+class EGLPrintFeaturesVulkanExtensionsInfoTest : public EGLPrintEGLinfoTest
+{};
+
+// Log enabled features
+TEST_P(EGLPrintFeaturesVulkanExtensionsInfoTest, LogEnabledFeatures)
+{
+    // The system EGL may not expose ANGLE-specific extensions, which is not a failure.
+    ANGLE_SKIP_TEST_IF(isDriverSystemEgl());
+
+    ASSERT_EQ(IsEGLClientExtensionEnabled("EGL_ANGLE_feature_control"), true);
+
+    EGLAttrib featureCount = -1;
+    EXPECT_EQ(static_cast<EGLBoolean>(EGL_TRUE),
+              eglQueryDisplayAttribANGLE(mDisplay, EGL_FEATURE_COUNT_ANGLE, &featureCount));
+    ASSERT_EGL_SUCCESS();
+    ASSERT_GT(featureCount, 0);
+    ASSERT_LT(featureCount, std::numeric_limits<int32_t>::max());
+
+    const char *kEnabled = "enabled";
+
+    std::cout << "Enabled ANGLE features:" << std::endl;
+    for (int32_t i = 0; i < featureCount; i++)
+    {
+        const char *name   = eglQueryStringiANGLE(mDisplay, EGL_FEATURE_NAME_ANGLE, i);
+        const char *status = eglQueryStringiANGLE(mDisplay, EGL_FEATURE_STATUS_ANGLE, i);
+        if (std::strcmp(status, kEnabled) == 0)
+        {
+            std::cout << name << std::endl;
+        }
+    }
+}
+
+// Log enabled vulkan instance and device extensions
+TEST_P(EGLPrintFeaturesVulkanExtensionsInfoTest, LogEnabledVulkanExtensions)
+{
+    // This test is only for the Vulkan backend
+    ANGLE_SKIP_TEST_IF(!IsVulkan());
+
+    EGLDeviceEXT eglDevice        = 0;
+    EGLAttrib result              = 0;
+    size_t nextExtension          = 0;
+    const char *const *extensions = nullptr;
+
+    // Query EGL device
+    EXPECT_EGL_TRUE(eglQueryDisplayAttribEXT(mDisplay, EGL_DEVICE_EXT, (EGLAttrib *)&eglDevice));
+    EXPECT_NE(EGL_NO_DEVICE_EXT, eglDevice);
+
+    // Query enabled Vulkan Instance extensions
+    EXPECT_EGL_TRUE(
+        eglQueryDeviceAttribEXT(eglDevice, EGL_VULKAN_INSTANCE_EXTENSIONS_ANGLE, &result));
+    extensions    = reinterpret_cast<const char *const *>(result);
+    nextExtension = 0;
+    EXPECT_NE(extensions, nullptr);
+
+    std::cout << "Enabled Vulkan Instance extensions:" << std::endl;
+    while (extensions[nextExtension])
+    {
+        std::cout << extensions[nextExtension] << std::endl;
+        nextExtension++;
+    }
+
+    // Query enabled Vulkan Device extensions
+    EXPECT_EGL_TRUE(
+        eglQueryDeviceAttribEXT(eglDevice, EGL_VULKAN_DEVICE_EXTENSIONS_ANGLE, &result));
+    extensions    = reinterpret_cast<const char *const *>(result);
+    nextExtension = 0;
+    EXPECT_NE(extensions, nullptr);
+
+    std::cout << "Enabled Vulkan Device extensions:" << std::endl;
+    while (extensions[nextExtension])
+    {
+        std::cout << extensions[nextExtension] << std::endl;
+        nextExtension++;
+    }
+}
+
+// This test suite is not instantiated on some OSes.
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(EGLPrintEGLinfoTest);
 ANGLE_INSTANTIATE_TEST(EGLPrintEGLinfoTest,
                        ES1_VULKAN(),
                        ES1_VULKAN_SWIFTSHADER(),
                        ES2_VULKAN(),
                        ES3_VULKAN(),
                        ES32_VULKAN(),
-                       ES31_VULKAN_SWIFTSHADER(),
-                       ES32_EGL());
+                       ES31_VULKAN_SWIFTSHADER());
 
 // This test suite is not instantiated on some OSes.
-GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(EGLPrintEGLinfoTest);
+GTEST_ALLOW_UNINSTANTIATED_PARAMETERIZED_TEST(EGLPrintFeaturesVulkanExtensionsInfoTest);
+ANGLE_INSTANTIATE_TEST(EGLPrintFeaturesVulkanExtensionsInfoTest,
+                       ES2_VULKAN(),
+                       ES3_VULKAN(),
+                       ES31_VULKAN(),
+                       ES32_VULKAN());

@@ -11,6 +11,7 @@
 #include <gtest/gtest.h>
 #include "tests/perf_tests/ANGLEPerfTest.h"
 #include "tests/perf_tests/ANGLEPerfTestArgs.h"
+#include "tests/test_expectations/GPUTestExpectationsParser.h"
 #include "util/capture/frame_capture_test_utils.h"
 #include "util/test_utils.h"
 
@@ -38,6 +39,8 @@ struct TracePerfParams final : public RenderTestParams
 
         // Display the frame after every drawBenchmark invocation
         iterationsPerStep = 1;
+
+        trackGpuTime = gTrackGPUTime;
 
         driver                   = driverType;
         eglParameters.renderer   = platformType;

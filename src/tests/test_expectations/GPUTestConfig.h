@@ -26,6 +26,7 @@ struct GPUTestConfig
         kAPISwiftShader,
         kAPIMetal,
         kAPIWgpu,
+        kAPINative,
     };
 
     enum Condition
@@ -56,6 +57,9 @@ struct GPUTestConfig
         kConditionIntel,
         kConditionVMWare,
         kConditionApple,
+        kConditionQualcomm,
+        kConditionARM,
+        kConditionSamsung,
         kConditionRelease,
         kConditionDebug,
         kConditionD3D9,
@@ -63,6 +67,7 @@ struct GPUTestConfig
         kConditionGLDesktop,
         kConditionGLES,
         kConditionVulkan,
+        kConditionNative,
         kConditionMetal,
         kConditionWgpu,
         kConditionNexus5X,
@@ -92,6 +97,7 @@ struct GPUTestConfig
         kConditionASan,
         kConditionTSan,
         kConditionUBSan,
+        kConditionIR,
 
         kNumberOfConditions,
     };
